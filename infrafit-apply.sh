@@ -291,7 +291,7 @@ auth_response="$(curl -sSf \
   -d "$auth_payload")" \
   || die "PerfectScale authentication request failed"
 
-TOKEN="$(jq -re '.access_token // .token' <<<"$auth_response")" \
+TOKEN="$(jq -re '.data.access_token // .access_token // .token' <<<"$auth_response")" \
   || die "authentication failed — no token in response: ${auth_response}"
 
 log "authenticated"
