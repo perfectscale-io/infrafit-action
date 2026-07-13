@@ -1,0 +1,38 @@
+{
+  "_readme": [
+    "Copy this file to .github/infrafit-cluster-map.json in your repository",
+    "and replace the example entries with your own cluster UIDs and values",
+    "file paths.",
+    "",
+    "Keys that start with '_' are treated as documentation comments and are",
+    "ignored by the action.",
+    "",
+    "How to find a cluster UID:",
+    "  1. Log in to https://app.perfectscale.io",
+    "  2. Open the cluster you want to map",
+    "  3. The UID is shown in the URL or in the cluster settings page",
+    "",
+    "  Alternatively, call the PerfectScale API directly:",
+    "    TOKEN=$(curl -s -X POST https://api.app.perfectscale.io/public/v1/auth/public_auth \\",
+    "      -H 'content-type: application/json' \\",
+    "      -d '{\"client_id\":\"<id>\",\"client_secret\":\"<secret>\"}' | jq -r .access_token)",
+    "    curl -s -H \"Authorization: Bearer $TOKEN\" \\",
+    "      https://api.app.perfectscale.io/public/v1/clusters | jq -r '.data[] | \"\\(.uid)  \\(.name)\"'",
+    "",
+    "Values file requirements:",
+    "  - Path must be relative to the repository root",
+    "  - The file must contain a top-level 'NodePools' key",
+    "  - Each entry under 'NodePools' must use the NodePool name as the key"
+  ],
+  "_example_structure": {
+    "NodePools": {
+      "my-nodepool": {
+        "disruption": {
+          "consolidationPolicy": "WhenEmpty"
+        }
+      }
+    }
+  },
+  "<cluster-uid-1>": "path/to/karpenter/values/prod.yaml",
+  "<cluster-uid-2>": "path/to/karpenter/values/staging.yaml"
+}

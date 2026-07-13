@@ -1,0 +1,90 @@
+# CI for perfectscale-io/infrafit-action
+#
+# Runs on every push and pull request:
+#   lint     — shellcheck on infrafit-apply.sh, actionlint on action.yml
+#   dry-run  — exercises the full script in dry-run mode against the stub
+#              recommendations fixture so the pipeline logic is always tested
+#
+# Actions are SHA-pinned per the org policy.
+
+name: CI
+
+on:
+  push:
+    branches: [ main, feat/initial-implementation ]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@e8d4307400f9427dba7cb98e488d6ab85f1cec5f # v7.0.0
+
+      - name: ShellCheck
+        uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # 2.0.0
+        with:
+          scandir: .
+          severity: warning
+
+      - name: actionlint
+        shell: bash
+        run: |
+          bash <(curl -sSf https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.12
+          ./actionlint -color
+
+  dry-run:
+    name: Dry-run smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@e8d4307400f9427dba7cb98e488d6ab85f1cec5f # v7.0.0
+
+      - name: Install yq
+        uses: mikefarah/yq@038d06d4e7a99b076ca40b409de5225b49b78a4c # v4.53.3
+
+      - name: Create fixture values file
+        shell: bash
+        run: |
+          mkdir -p karpenter-profiles/values
+          cat > karpenter-profiles/values/test.yaml <<'EOF'
+          NodePools:
+            demo-nodepool:
+              disruption:
+                consolidationPolicy: WhenEmpty
+                consolidateAfter: 2m
+              limits:
+                cpu: '64'
+                memory: 800Gi
+          EOF
+
+      - name: Create cluster-map fixture
+        shell: bash
+        run: |
+          cat > .github/infrafit-cluster-map.json <<'EOF'
+          {
+            "_readme": "test fixture",
+            "test-cluster-uid": "karpenter-profiles/values/test.yaml"
+          }
+          EOF
+
+      - name: Run dry-run
+        shell: bash
+        env:
+          # Fake credentials — dry-run prevents any real API calls or git/gh
+          # operations, but the env vars must be non-empty to pass validation.
+          PS_CLIENT_ID: test-client-id
+          PS_CLIENT_SECRET: test-client-secret
+          GH_TOKEN: test-gh-token
+          AI_API_KEY: test-ai-key
+          AI_PROVIDER: openai
+          CLUSTER_MAP: .github/infrafit-cluster-map.json
+        run: |
+          chmod +x infrafit-apply.sh
+          ./infrafit-apply.sh \
+            --stub-file stub-recommendations.json \
+            --dry-run

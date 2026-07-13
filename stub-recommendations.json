@@ -1,0 +1,250 @@
+{
+  "data": [
+    {
+      "group": "demo-nodepool",
+      "architecture": "amd64",
+      "reservation": "on_demand",
+      "autoscaler_type": "karpenter",
+      "min_nodes": 0,
+      "max_nodes": 8,
+      "avg_nodes": 3,
+      "running_minutes": 43200,
+      "hourly_cost": 1.46,
+      "timeframe_cost": 1051.2,
+      "timeframe_idle_cost": 315.4,
+      "cpu": {
+        "requested_avg": 18.0,
+        "used_avg": 10.2,
+        "used_p95": 16.4,
+        "used_p99": 17.1
+      },
+      "mem": {
+        "requested_avg_mib": 131072,
+        "used_avg_mib": 80000,
+        "used_p95_mib": 118000
+      },
+      "gpu": {
+        "allocated_avg": 0,
+        "used_avg": 0,
+        "sharing_type": []
+      },
+      "indicators": [
+        "UnderutilizedNodes"
+      ],
+      "max_indicator": {
+        "name": "UnderutilizedNodes",
+        "type": "waste",
+        "severity": 2
+      },
+      "first_seen_at": "2026-06-29T12:26:57Z",
+      "last_seen_at": "2026-06-30T08:03:38Z",
+      "labels": {
+        "type": "demo-nodepool"
+      },
+      "node_types": [
+        {
+          "instance_type": "r5.2xlarge",
+          "instance_family": "r5",
+          "instance_cpu_capacity": 8,
+          "instance_mem_mib_capacity": 65536,
+          "min_nodes": 0,
+          "max_nodes": 5,
+          "avg_nodes": 1.5,
+          "hourly_cost": 0.504,
+          "cpu": {
+            "requested_avg": 9.0,
+            "used_avg": 5.1
+          },
+          "mem": {
+            "requested_avg_mib": 65536,
+            "used_avg_mib": 40000
+          }
+        },
+        {
+          "instance_type": "r5a.2xlarge",
+          "instance_family": "r5a",
+          "instance_cpu_capacity": 8,
+          "instance_mem_mib_capacity": 65536,
+          "min_nodes": 0,
+          "max_nodes": 5,
+          "avg_nodes": 1.5,
+          "hourly_cost": 0.452,
+          "cpu": {
+            "requested_avg": 9.0,
+            "used_avg": 5.1
+          },
+          "mem": {
+            "requested_avg_mib": 65536,
+            "used_avg_mib": 40000
+          }
+        }
+      ],
+      "recommendations": {
+        "type": "karpenter",
+        "has_recommended_changes": true,
+        "current_config": {
+          "apiVersion": "karpenter.sh/v1",
+          "kind": "NodePool",
+          "metadata": {
+            "name": "demo-nodepool",
+            "labels": {
+              "type": "demo-nodepool"
+            }
+          },
+          "spec": {
+            "disruption": {
+              "budgets": [
+                {
+                  "nodes": "10%"
+                }
+              ],
+              "consolidateAfter": "2m",
+              "consolidationPolicy": "WhenEmpty"
+            },
+            "limits": {
+              "cpu": "64",
+              "memory": "800Gi"
+            },
+            "template": {
+              "metadata": {
+                "labels": {
+                  "type": "demo-nodepool"
+                }
+              },
+              "spec": {
+                "expireAfter": "720h",
+                "nodeClassRef": {
+                  "group": "karpenter.k8s.aws",
+                  "kind": "EC2NodeClass",
+                  "name": "default"
+                },
+                "requirements": [
+                  {
+                    "key": "topology.kubernetes.io/zone",
+                    "operator": "In",
+                    "values": [
+                      "us-east-1a",
+                      "us-east-1b",
+                      "us-east-1c"
+                    ]
+                  },
+                  {
+                    "key": "node.kubernetes.io/instance-type",
+                    "operator": "In",
+                    "values": [
+                      "r5a.2xlarge",
+                      "r5.2xlarge"
+                    ]
+                  },
+                  {
+                    "key": "karpenter.sh/capacity-type",
+                    "operator": "In",
+                    "values": [
+                      "on-demand"
+                    ]
+                  }
+                ],
+                "taints": [
+                  {
+                    "effect": "NoSchedule",
+                    "key": "demo-nodepool"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "recommended_config": {
+          "apiVersion": "karpenter.sh/v1",
+          "kind": "NodePool",
+          "metadata": {
+            "name": "demo-nodepool",
+            "labels": {
+              "type": "demo-nodepool"
+            }
+          },
+          "spec": {
+            "disruption": {
+              "budgets": [
+                {
+                  "nodes": "10%"
+                }
+              ],
+              "consolidateAfter": "2m",
+              "consolidationPolicy": "WhenEmptyOrUnderutilized"
+            },
+            "limits": {
+              "cpu": "64",
+              "memory": "800Gi"
+            },
+            "template": {
+              "metadata": {
+                "labels": {
+                  "type": "demo-nodepool"
+                }
+              },
+              "spec": {
+                "expireAfter": "720h",
+                "nodeClassRef": {
+                  "group": "karpenter.k8s.aws",
+                  "kind": "EC2NodeClass",
+                  "name": "default"
+                },
+                "requirements": [
+                  {
+                    "key": "topology.kubernetes.io/zone",
+                    "operator": "In",
+                    "values": [
+                      "us-east-1a",
+                      "us-east-1b",
+                      "us-east-1c"
+                    ]
+                  },
+                  {
+                    "key": "node.kubernetes.io/instance-type",
+                    "operator": "In",
+                    "values": [
+                      "r5a.2xlarge",
+                      "r5.2xlarge"
+                    ]
+                  },
+                  {
+                    "key": "karpenter.sh/capacity-type",
+                    "operator": "In",
+                    "values": [
+                      "on-demand"
+                    ]
+                  }
+                ],
+                "taints": [
+                  {
+                    "effect": "NoSchedule",
+                    "key": "demo-nodepool"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "changes": [
+          {
+            "id": "consolidation-policy-optimization",
+            "title": "Consolidation Policy Optimization",
+            "path": ".spec.disruption.consolidationPolicy",
+            "operation": "replace",
+            "current_value": "WhenEmpty",
+            "recommended_value": "WhenEmptyOrUnderutilized",
+            "rationale": "Underutilized nodes are not consolidated under WhenEmpty policy. Switching to WhenEmptyOrUnderutilized enables proactive consolidation of underutilized nodes, reducing idle capacity costs."
+          }
+        ]
+      }
+    }
+  ],
+  "meta": {
+    "pagination": {
+      "next": null,
+      "prev": null,
+      "page_size": 50
+    }
+  }
+}

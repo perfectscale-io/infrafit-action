@@ -1,0 +1,149 @@
+name: InfraFit Apply
+description: >
+  Fetch PerfectScale InfraFit Karpenter NodePool recommendations, apply them
+  to Helm values files in the caller's repository, and open a pull request.
+  Nothing is applied to a live cluster — the PR review is the gate.
+
+author: PerfectScale by DoiT
+
+branding:
+  icon: sliders
+  color: blue
+
+inputs:
+  ps_client_id:
+    description: PerfectScale API client id (Org Settings → API Tokens).
+    required: true
+
+  ps_client_secret:
+    description: PerfectScale API client secret.
+    required: true
+
+  ai_api_key:
+    description: >
+      API key for the AI provider used to translate recommendations into YAML
+      edits. Anthropic and OpenAI keys are auto-detected from the key prefix;
+      set ai_provider explicitly when using a compatible third-party endpoint.
+    required: true
+
+  github_token:
+    description: >
+      GitHub token with contents:write, pull-requests:write, and issues:write
+      on the caller's repository. Use a GitHub App token so that opened PRs
+      can trigger downstream branch-protection checks.
+    required: true
+
+  cluster_map:
+    description: >
+      Repo-relative path to the cluster-map JSON file that maps PerfectScale
+      cluster UIDs to Helm values files. See cluster-map.example.json for the
+      expected format.
+    required: false
+    default: .github/infrafit-cluster-map.json
+
+  pr_mode:
+    description: >
+      How to group pull requests. "per-cluster" opens one PR per cluster that
+      produced edits. "single" opens one combined PR for the entire run.
+    required: false
+    default: per-cluster
+
+  title_prefix:
+    description: >
+      String prepended verbatim to every PR title and commit subject line.
+      Useful for attaching a Jira or Linear ticket key.
+    required: false
+    default: "feat(INFRAFIT-0):"
+
+  base_branch:
+    description: Git branch to branch off and target for pull requests.
+    required: false
+    default: master
+
+  ps_base_url:
+    description: >
+      PerfectScale public API base URL. Override only when targeting a
+      non-production instance (e.g. during development or testing).
+    required: false
+    default: https://api.app.perfectscale.io/public/v1
+
+  ai_provider:
+    description: >
+      AI provider to use for YAML editing: "anthropic" or "openai".
+      Auto-detected from the key prefix when omitted (sk-ant-* → anthropic,
+      everything else → openai).
+    required: false
+    default: ""
+
+  ai_base_url:
+    description: >
+      Override the AI API endpoint. Use this for Azure OpenAI deployments or
+      any other OpenAI-compatible proxy. Leave empty to use the provider
+      default.
+    required: false
+    default: ""
+
+  ai_model:
+    description: >
+      Override the AI model. Defaults to claude-sonnet-4-5 for Anthropic and
+      gpt-4o for OpenAI when left empty.
+    required: false
+    default: ""
+
+  stub_file:
+    description: >
+      Repo-relative path to a local recommendations JSON file. When set, the
+      per-cluster API fetch is skipped and this file is used as the
+      recommendations payload for every mapped cluster. Intended for pipeline
+      testing only — test PRs are marked [TEST] and use infrafit-test/ branch
+      prefixes.
+    required: false
+    default: ""
+
+  dry_run:
+    description: >
+      When "true", the action prints what it would do but makes no git commits,
+      opens no PRs, and opens no issues.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Install yq
+      uses: mikefarah/yq@038d06d4e7a99b076ca40b409de5225b49b78a4c   # v4.53.3
+
+    - name: Configure git identity
+      shell: bash
+      run: |
+        git config user.name  "infrafit-bot"
+        git config user.email "infrafit-bot@users.noreply.github.com"
+
+    - name: Run InfraFit apply
+      shell: bash
+      env:
+        PS_CLIENT_ID:     ${{ inputs.ps_client_id }}
+        PS_CLIENT_SECRET: ${{ inputs.ps_client_secret }}
+        PS_BASE_URL:      ${{ inputs.ps_base_url }}
+        AI_API_KEY:       ${{ inputs.ai_api_key }}
+        AI_PROVIDER:      ${{ inputs.ai_provider }}
+        AI_BASE_URL:      ${{ inputs.ai_base_url }}
+        AI_MODEL:         ${{ inputs.ai_model }}
+        GH_TOKEN:         ${{ inputs.github_token }}
+        CLUSTER_MAP:      ${{ inputs.cluster_map }}
+        BRANCH_BASE:      ${{ inputs.base_branch }}
+      run: |
+        # Resolve script path relative to this action's own directory so it
+        # works regardless of where the caller checked out their repository.
+        SCRIPT="${{ github.action_path }}/infrafit-apply.sh"
+        chmod +x "$SCRIPT"
+
+        args=(
+          --pr-mode      "${{ inputs.pr_mode }}"
+          --title-prefix "${{ inputs.title_prefix }}"
+        )
+
+        [[ -n "${{ inputs.stub_file }}" ]] && args+=(--stub-file "${{ inputs.stub_file }}")
+        [[ "${{ inputs.dry_run }}" == "true" ]] && args+=(--dry-run)
+
+        "$SCRIPT" "${args[@]}"

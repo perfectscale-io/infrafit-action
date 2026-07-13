@@ -1,0 +1,9 @@
+# shellcheck configuration for infrafit-apply.sh
+#
+# SC2034 — unused variables: suppressed because some variables are set for
+#           export/readability and shellcheck cannot see all consumers.
+
+shell=bash
+enable=all
+disable=SC2034
+severity=warning
