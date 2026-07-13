@@ -56,6 +56,13 @@ readonly MAX_PAGES=100                # pagination safety cap
 
 # ─── runtime configuration ────────────────────────────────────────────────────
 
+# Required — must be set in the environment; validated explicitly below.
+PS_CLIENT_ID="${PS_CLIENT_ID:-}"
+PS_CLIENT_SECRET="${PS_CLIENT_SECRET:-}"
+GH_TOKEN="${GH_TOKEN:-}"
+AI_API_KEY="${AI_API_KEY:-}"
+
+# Optional — fall back to defaults when not set.
 PS_BASE_URL="${PS_BASE_URL:-$DEFAULT_PS_BASE_URL}"
 RATE_LIMIT_SLEEP="${RATE_LIMIT_SLEEP:-$DEFAULT_RATE_LIMIT_SLEEP}"
 CLUSTER_MAP="${CLUSTER_MAP:-$DEFAULT_CLUSTER_MAP}"
@@ -260,6 +267,14 @@ mapfile -t MAPPED_UIDS < <(
   || die "infrafit-cluster-map.json has no UID entries (only comment keys starting with '_'): ${CLUSTER_MAP}"
 
 log "infrafit-cluster-map.json: ${#MAPPED_UIDS[@]} UID(s) — ${MAPPED_UIDS[*]}"
+
+if [[ "$DRY_RUN" == "true" ]]; then
+  log "[dry-run] cluster-map is valid — skipping API calls, git operations, and PR/issue creation"
+  log "────────────────── run summary ──────────────────────────────"
+  log "mode: DRY RUN — no changes made"
+  log "─────────────────────────────────────────────────────────────"
+  exit 0
+fi
 
 # ─── phase 0: authenticate ────────────────────────────────────────────────────
 
