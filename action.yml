@@ -1,8 +1,8 @@
 name: InfraFit Apply
 description: >
   Fetch PerfectScale InfraFit Karpenter NodePool recommendations, apply them
-  to Helm values files in the caller's repository, and open a pull request.
-  Nothing is applied to a live cluster — the PR review is the gate.
+  to Karpenter configuration files in the caller's repository, and open a pull
+  request. Nothing is applied to a live cluster — the PR review is the gate.
 
 author: PerfectScale by DoiT
 
@@ -36,7 +36,7 @@ inputs:
   cluster_map:
     description: >
       Repo-relative path to the cluster-map JSON file that maps PerfectScale
-      cluster UIDs to Helm values files. See cluster-map.example.json for the
+      cluster UIDs to Karpenter configuration files. See cluster-map.example.json for the
       expected format.
     required: false
     default: .github/infrafit-cluster-map.json

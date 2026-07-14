@@ -2,8 +2,8 @@
 # infrafit-apply.sh — PerfectScale InfraFit NodePool reconciliation
 #
 # Fetches Karpenter NodePool recommendations from the PerfectScale API,
-# translates them into edits on the caller's Helm values files, and opens a
-# GitHub pull request for review.  Nothing is applied to a live cluster.
+# translates them into edits on the caller's Karpenter configuration files,
+# and opens a GitHub pull request for review.  Nothing is applied to a live cluster.
 #
 # AI is used for exactly one focused step: given the current YAML file and the
 # structured list of changes from the API, produce the edited YAML.  Every
@@ -252,7 +252,7 @@ _ai_call_openai() {
 # ─── infrafit-cluster-map ─────────────────────────────────────────────────────
 
 [[ -f "$CLUSTER_MAP" ]] \
-  || die "cluster-map not found at '${CLUSTER_MAP}'. Create this file in your repository and map your PerfectScale cluster UIDs to Helm values file paths. See https://github.com/perfectscale-io/infrafit-action#setup for instructions."
+  || die "cluster-map not found at '${CLUSTER_MAP}'. Create this file in your repository and map your PerfectScale cluster UIDs to Karpenter configuration file paths. See https://github.com/perfectscale-io/infrafit-action#setup for instructions."
 
 # Validate it is parseable JSON before doing anything else.
 jq -e . "$CLUSTER_MAP" >/dev/null \
@@ -508,7 +508,7 @@ build_pr_body() {
   local skipped_section="$2"
   local stub_notice="$3"
 
-  printf '%s\nAutomated InfraFit NodePool recommendations from PerfectScale.\n\n## Applied\n\n%s\n\n## Skipped (manual review required)\n\n%s\n\n---\nMerge → ArgoCD syncs on the next reconcile. No live changes were made by CI.\n' \
+  printf '%s\nAutomated InfraFit NodePool recommendations from PerfectScale.\n\n## Applied\n\n%s\n\n## Skipped (manual review required)\n\n%s\n\n---\nMerge → your cluster will pick up the changes on the next sync. No live changes were made by CI.\n' \
     "$stub_notice" \
     "$applied_section" \
     "${skipped_section:-_None — all recommendations were applied._}"
@@ -602,7 +602,7 @@ ${skip_items}
 ## How to resolve
 
 - **uid not in infrafit-cluster-map.json** — add the cluster UID to \`.github/infrafit-cluster-map.json\` mapped to the correct Helm values file.
-- **values file not found** — verify the path in \`.github/infrafit-cluster-map.json\` matches the actual file location in this repository.
+- **configuration file not found** — verify the path in \`.github/infrafit-cluster-map.json\` matches the actual file location in this repository.
 - **pool not defined in values file** — the PerfectScale API returned a recommendation for a NodePool that does not appear under \`NodePools:\` in the mapped values file. Add the pool or update the mapping.
 - **AI returned empty output** — re-run the workflow. If the issue persists, apply the change manually and close this issue.
 ISSUE
