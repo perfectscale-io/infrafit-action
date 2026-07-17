@@ -18,9 +18,6 @@
 # Flags:
 #   --pr-mode      per-cluster|single   (default: per-cluster)
 #   --title-prefix STRING               (default: "feat(INFRAFIT-0):")
-#   --stub-file    PATH                 Skip the per-cluster API fetch and use
-#                                       this local JSON as recommendations for
-#                                       every mapped cluster (test mode).
 #   --dry-run                           Print what would happen; make no changes.
 #
 # Required environment variables:
@@ -37,8 +34,8 @@
 #   AI_MODEL            Override AI model
 #   CLUSTER_MAP         Path to the cluster-map JSON file
 #                       (default: .github/infrafit-cluster-map.json)
-#   BRANCH_BASE         Base branch for PRs  (default: master)
-#   RATE_LIMIT_SLEEP    Seconds between PerfectScale API calls  (default: 7)
+#   BRANCH_BASE         Base branch for PRs  (default: main)
+#   RATE_LIMIT_SLEEP    Seconds between PerfectScale API calls  (default: 6)
 #
 # Runtime dependencies: bash ≥4, curl, jq, yq (mikefarah/yq v4+), git, gh
 
@@ -47,10 +44,10 @@ set -euo pipefail
 # ─── constants ────────────────────────────────────────────────────────────────
 
 readonly DEFAULT_PS_BASE_URL="https://api.app.perfectscale.io/public/v1"
-readonly DEFAULT_RATE_LIMIT_SLEEP=7   # stay under 10 req/min PS rate limit
+readonly DEFAULT_RATE_LIMIT_SLEEP=6   # PS API allows 10 req/min per client → 60/10 = 6s min spacing
 readonly DEFAULT_PR_MODE="per-cluster"
 readonly DEFAULT_TITLE_PREFIX="feat(INFRAFIT-0):"
-readonly DEFAULT_BRANCH_BASE="master"
+readonly DEFAULT_BRANCH_BASE="main"
 readonly DEFAULT_CLUSTER_MAP=".github/infrafit-cluster-map.json"
 readonly MAX_PAGES=100                # pagination safety cap
 
@@ -75,14 +72,12 @@ AI_MODEL="${AI_MODEL:-}"
 
 PR_MODE="$DEFAULT_PR_MODE"
 TITLE_PREFIX="$DEFAULT_TITLE_PREFIX"
-STUB_FILE=""
 DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --pr-mode)      PR_MODE="$2";      shift 2 ;;
     --title-prefix) TITLE_PREFIX="$2"; shift 2 ;;
-    --stub-file)    STUB_FILE="$2";    shift 2 ;;
     --dry-run)      DRY_RUN=true;      shift   ;;
     *) echo "ERROR: unknown argument: $1" >&2; exit 1 ;;
   esac
@@ -90,11 +85,6 @@ done
 
 [[ "$PR_MODE" == "per-cluster" || "$PR_MODE" == "single" ]] \
   || { echo "ERROR: --pr-mode must be 'per-cluster' or 'single', got: ${PR_MODE}" >&2; exit 1; }
-
-if [[ -n "$STUB_FILE" && ! -f "$STUB_FILE" ]]; then
-  echo "ERROR: --stub-file path does not exist: ${STUB_FILE}" >&2
-  exit 1
-fi
 
 # ─── dependency check ─────────────────────────────────────────────────────────
 
@@ -148,11 +138,32 @@ die()  { echo "[infrafit] ERROR: $*" >&2; exit 1; }
 
 # ps_get <path>
 # Perform an authenticated GET against the PerfectScale public API.
+# The PS API allows 10 requests/minute per client. Callers space requests by
+# RATE_LIMIT_SLEEP to stay under that, but if a 429 still comes back (shared
+# token, clock drift), honour Retry-After and retry a bounded number of times.
 ps_get() {
   local api_path="$1"
-  curl -sSf \
-    -H "Authorization: Bearer ${TOKEN}" \
-    "${PS_BASE_URL}${api_path}"
+  local attempt=0 http_code body retry_after
+  while true; do
+    attempt=$(( attempt + 1 ))
+    # Capture body and trailing HTTP status without -f, so we can inspect 429.
+    body="$(curl -sS -w $'\n%{http_code}' \
+      -H "Authorization: Bearer ${TOKEN}" \
+      "${PS_BASE_URL}${api_path}")" || return 1
+    http_code="${body##*$'\n'}"
+    body="${body%$'\n'*}"
+
+    if [[ "$http_code" == "429" && $attempt -le 5 ]]; then
+      retry_after="${RATE_LIMIT_SLEEP}"
+      warn "  rate limited (429) on ${api_path} — waiting ${retry_after}s (attempt ${attempt}/5)"
+      sleep "$retry_after"
+      continue
+    fi
+
+    [[ "$http_code" =~ ^2 ]] || return 1
+    printf '%s' "$body"
+    return 0
+  done
 }
 
 # ai_edit_yaml <values_file> <pool_name> <changes_json>
@@ -347,43 +358,38 @@ for uid in "${MAPPED_UIDS[@]}"; do
     continue
   fi
 
-  # Phase 1: fetch recommendations (or load stub)
-  if [[ -n "$STUB_FILE" ]]; then
-    log "  [stub] loading recommendations from ${STUB_FILE}"
-    recs_json="$(cat "$STUB_FILE")"
-  else
-    log "  fetching recommendations (sleeping ${RATE_LIMIT_SLEEP}s for rate limit)"
+  # Phase 1: fetch recommendations
+  log "  fetching recommendations (sleeping ${RATE_LIMIT_SLEEP}s for rate limit)"
+  sleep "$RATE_LIMIT_SLEEP"
+
+  recs_json=""
+  next_cursor=""
+  page=0
+
+  while true; do
+    page=$(( page + 1 ))
+    if [[ $page -gt $MAX_PAGES ]]; then
+      warn "  pagination cap (${MAX_PAGES} pages) reached for uid ${uid}"
+      break
+    fi
+
+    api_path="/clusters/${uid}/infra-fit?period=30d&page_size=200&has_recommended_changes=true"
+    [[ -n "$next_cursor" ]] && api_path="${api_path}&cursor=${next_cursor}"
+
+    page_json="$(ps_get "$api_path")" \
+      || die "failed to fetch recommendations for cluster ${uid} (page ${page})"
+
+    if [[ -z "$recs_json" ]]; then
+      recs_json="$page_json"
+    else
+      recs_json="$(jq -s '.[0].data += .[1].data | .[0]' \
+        <(echo "$recs_json") <(echo "$page_json"))"
+    fi
+
+    next_cursor="$(jq -r '.meta.pagination.next // empty' <<<"$page_json")"
+    [[ -n "$next_cursor" ]] || break
     sleep "$RATE_LIMIT_SLEEP"
-
-    recs_json=""
-    next_cursor=""
-    page=0
-
-    while true; do
-      page=$(( page + 1 ))
-      if [[ $page -gt $MAX_PAGES ]]; then
-        warn "  pagination cap (${MAX_PAGES} pages) reached for uid ${uid}"
-        break
-      fi
-
-      api_path="/clusters/${uid}/infra-fit?period=30d&page_size=200&has_recommended_changes=true"
-      [[ -n "$next_cursor" ]] && api_path="${api_path}&cursor=${next_cursor}"
-
-      page_json="$(ps_get "$api_path")" \
-        || die "failed to fetch recommendations for cluster ${uid} (page ${page})"
-
-      if [[ -z "$recs_json" ]]; then
-        recs_json="$page_json"
-      else
-        recs_json="$(jq -s '.[0].data += .[1].data | .[0]' \
-          <(echo "$recs_json") <(echo "$page_json"))"
-      fi
-
-      next_cursor="$(jq -r '.meta.pagination.next // empty' <<<"$page_json")"
-      [[ -n "$next_cursor" ]] || break
-      sleep "$RATE_LIMIT_SLEEP"
-    done
-  fi
+  done
 
   # Phase 1: filter to actionable Karpenter pools
   actionable_pools="$(jq -c '
@@ -506,10 +512,8 @@ open_pr() {
 build_pr_body() {
   local applied_section="$1"
   local skipped_section="$2"
-  local stub_notice="$3"
 
-  printf '%s\nAutomated InfraFit NodePool recommendations from PerfectScale.\n\n## Applied\n\n%s\n\n## Skipped (manual review required)\n\n%s\n\n---\nMerge → your cluster will pick up the changes on the next sync. No live changes were made by CI.\n' \
-    "$stub_notice" \
+  printf 'Automated InfraFit NodePool recommendations from PerfectScale.\n\n## Applied\n\n%s\n\n## Skipped (manual review required)\n\n%s\n\n---\nMerge → your cluster will pick up the changes on the next sync. No live changes were made by CI.\n' \
     "$applied_section" \
     "${skipped_section:-_None — all recommendations were applied._}"
 }
@@ -518,10 +522,6 @@ uids_with_edits=()
 for uid in "${!EDITED_FILES[@]}"; do
   uids_with_edits+=("$uid")
 done
-
-stub_notice=""
-[[ -n "$STUB_FILE" ]] \
-  && stub_notice="> ⚠️ TEST RUN — recommendations were loaded from a local stub file, not the live API."
 
 if [[ ${#uids_with_edits[@]} -eq 0 ]]; then
   log "no edits produced — no PRs to open"
@@ -532,11 +532,9 @@ else
       for uid in "${uids_with_edits[@]}"; do
         cluster_name="${CLUSTER_NAME_BY_UID[$uid]:-$uid}"
         safe_name="${cluster_name//[^a-zA-Z0-9-]/-}"
-        branch_prefix="infrafit"; [[ -n "$STUB_FILE" ]] && branch_prefix="infrafit-test"
-        title_tag="";             [[ -n "$STUB_FILE" ]] && title_tag=" [TEST]"
 
-        branch="${branch_prefix}/${safe_name}-${TODAY}"
-        title="${TITLE_PREFIX}${title_tag} InfraFit NodePool tuning (${cluster_name})"
+        branch="infrafit/${safe_name}-${TODAY}"
+        title="${TITLE_PREFIX} InfraFit NodePool tuning (${cluster_name})"
         applied="**${cluster_name}** (${EDITED_FILES[$uid]})"$'\n'"${CLUSTER_SUMMARIES[$uid]}"
 
         cluster_skips=""
@@ -544,17 +542,14 @@ else
           [[ "${entry%%	*}" == "$uid" ]] && cluster_skips+="${entry##*	}"$'\n'
         done
 
-        body="$(build_pr_body "$applied" "$cluster_skips" "$stub_notice")"
+        body="$(build_pr_body "$applied" "$cluster_skips")"
         open_pr "$branch" "$title" "$body" "${EDITED_FILES[$uid]}"
       done
       ;;
 
     single)
-      branch_prefix="infrafit"; [[ -n "$STUB_FILE" ]] && branch_prefix="infrafit-test"
-      title_tag="";             [[ -n "$STUB_FILE" ]] && title_tag=" [TEST]"
-
-      branch="${branch_prefix}/all-${TODAY}"
-      title="${TITLE_PREFIX}${title_tag} InfraFit NodePool tuning (${#uids_with_edits[@]} cluster(s))"
+      branch="infrafit/all-${TODAY}"
+      title="${TITLE_PREFIX} InfraFit NodePool tuning (${#uids_with_edits[@]} cluster(s))"
 
       all_applied=""
       all_files=()
@@ -569,7 +564,7 @@ else
         all_skips+="${entry##*	}"$'\n'
       done
 
-      body="$(build_pr_body "$all_applied" "$all_skips" "$stub_notice")"
+      body="$(build_pr_body "$all_applied" "$all_skips")"
       open_pr "$branch" "$title" "$body" "${all_files[@]}"
       ;;
   esac
@@ -589,11 +584,9 @@ if [[ ${#SKIP_LIST[@]} -gt 0 ]]; then
     skip_items+="- **${name_part}** (\`${uid_part}\`): ${reason}"$'\n'
   done
 
-  issue_title_tag=""; [[ -n "$STUB_FILE" ]] && issue_title_tag=" [TEST]"
-  issue_title="InfraFit${issue_title_tag}: ${#SKIP_LIST[@]} item(s) need manual review"
+  issue_title="InfraFit: ${#SKIP_LIST[@]} item(s) need manual review"
 
   issue_body="$(cat <<ISSUE
-${stub_notice}
 These InfraFit recommendations could not be applied automatically.
 
 ## Items requiring manual action

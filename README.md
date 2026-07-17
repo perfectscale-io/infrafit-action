@@ -157,21 +157,12 @@ Actions UI or add a `schedule:` trigger to run it automatically.
 | `cluster_map` | | `.github/infrafit/cluster-map.json` | Path to cluster-map file |
 | `pr_mode` | | `per-cluster` | `per-cluster` or `single` |
 | `title_prefix` | | `feat(INFRAFIT-0):` | Prefix for PR titles and commit subjects |
-| `base_branch` | | `master` | Branch to target for PRs |
+| `base_branch` | | `main` | Branch to target for PRs |
 | `ps_base_url` | | `https://api.app.perfectscale.io/public/v1` | PerfectScale API URL |
 | `ai_provider` | | auto-detected | `anthropic` or `openai` |
 | `ai_base_url` | | provider default | Override AI endpoint |
 | `ai_model` | | provider default | Override AI model |
-| `stub_file` | | — | Local recommendations JSON (test mode) |
 | `dry_run` | | `false` | Print plan only, make no changes |
-
-## Testing the pipeline
-
-To test the full pipeline without live API data, add a
-`.github/infrafit/stub-recommendations.json` file (copy
-[`stub-recommendations.json`](stub-recommendations.json) as a starting point)
-and set `stub_file` in the action inputs.  Test PRs are marked `[TEST]` and
-use `infrafit-test/` branch prefixes so they cannot be confused with real runs.
 
 ## What gets skipped
 

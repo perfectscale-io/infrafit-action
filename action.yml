@@ -58,7 +58,7 @@ inputs:
   base_branch:
     description: Git branch to branch off and target for pull requests.
     required: false
-    default: master
+    default: main
 
   ps_base_url:
     description: >
@@ -87,16 +87,6 @@ inputs:
     description: >
       Override the AI model. Defaults to claude-sonnet-4-5 for Anthropic and
       gpt-4o for OpenAI when left empty.
-    required: false
-    default: ""
-
-  stub_file:
-    description: >
-      Repo-relative path to a local recommendations JSON file. When set, the
-      per-cluster API fetch is skipped and this file is used as the
-      recommendations payload for every mapped cluster. Intended for pipeline
-      testing only — test PRs are marked [TEST] and use infrafit-test/ branch
-      prefixes.
     required: false
     default: ""
 
@@ -143,7 +133,6 @@ runs:
           --title-prefix "${{ inputs.title_prefix }}"
         )
 
-        [[ -n "${{ inputs.stub_file }}" ]] && args+=(--stub-file "${{ inputs.stub_file }}")
         [[ "${{ inputs.dry_run }}" == "true" ]] && args+=(--dry-run)
 
         "$SCRIPT" "${args[@]}"
