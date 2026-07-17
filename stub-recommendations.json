@@ -81,8 +81,8 @@
       ],
       "recommendations": {
         "type": "karpenter",
-        "has_recommended_changes": true,
-        "current_config": {
+        "hasRecommendedChanges": true,
+        "currentConfig": {
           "apiVersion": "karpenter.sh/v1",
           "kind": "NodePool",
           "metadata": {
@@ -154,7 +154,7 @@
             }
           }
         },
-        "recommended_config": {
+        "recommendedConfig": {
           "apiVersion": "karpenter.sh/v1",
           "kind": "NodePool",
           "metadata": {
@@ -232,8 +232,8 @@
             "title": "Consolidation Policy Optimization",
             "path": ".spec.disruption.consolidationPolicy",
             "operation": "replace",
-            "current_value": "WhenEmpty",
-            "recommended_value": "WhenEmptyOrUnderutilized",
+            "currentValue": "WhenEmpty",
+            "recommendedValue": "WhenEmptyOrUnderutilized",
             "rationale": "Underutilized nodes are not consolidated under WhenEmpty policy. Switching to WhenEmptyOrUnderutilized enables proactive consolidation of underutilized nodes, reducing idle capacity costs."
           }
         ]

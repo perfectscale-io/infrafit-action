@@ -157,7 +157,7 @@ ps_get() {
 
 # ai_edit_yaml <values_file> <pool_name> <changes_json>
 # Ask the configured AI provider to apply <changes_json> (a JSON array of
-# {path, operation, current_value, recommended_value} objects) to the
+# {path, operation, currentValue, recommendedValue} objects) to the
 # NodePool named <pool_name> inside <values_file>.
 # Prints the complete edited file content to stdout.
 ai_edit_yaml() {
@@ -178,7 +178,7 @@ Task: apply the NodePool changes listed below to the YAML file provided.
 
 NodePool name: ${pool_name}
 
-Changes (JSON array — each entry has path, operation, current_value, recommended_value):
+Changes (JSON array — each entry has path, operation, currentValue, recommendedValue):
 ${changes_json}
 
 Editing rules:
@@ -186,7 +186,7 @@ Editing rules:
    ".spec.disruption.consolidationPolicy").  In the values file, the same
    field lives under NodePools.<pool_name>.<path_after_.spec.> (e.g.
    NodePools.${pool_name}.disruption.consolidationPolicy).
-2. "replace" and "add": set the target field to recommended_value, preserving
+2. "replace" and "add": set the target field to recommendedValue, preserving
    the surrounding YAML structure, indentation, and inline comments exactly.
 3. "remove": delete the field entirely.  For list elements matched by a key
    predicate (e.g. a requirements[] entry), remove only the matching element.
@@ -332,7 +332,7 @@ for uid in "${MAPPED_UIDS[@]}"; do
   log "  cluster: ${cluster_name} (uid: ${uid})"
 
   # Phase 2: resolve uid → values file
-  values_file="$(jq -re --arg u "$uid" '.[$u] // empty' "$CLUSTER_MAP")"
+  values_file="$(jq -r --arg u "$uid" '.[$u] // empty' "$CLUSTER_MAP")"
 
   if [[ -z "$values_file" ]]; then
     # Should not happen since MAPPED_UIDS came from the map itself, but guard.
@@ -379,7 +379,7 @@ for uid in "${MAPPED_UIDS[@]}"; do
           <(echo "$recs_json") <(echo "$page_json"))"
       fi
 
-      next_cursor="$(jq -re '.meta.pagination.next // empty' <<<"$page_json")"
+      next_cursor="$(jq -r '.meta.pagination.next // empty' <<<"$page_json")"
       [[ -n "$next_cursor" ]] || break
       sleep "$RATE_LIMIT_SLEEP"
     done
@@ -390,10 +390,10 @@ for uid in "${MAPPED_UIDS[@]}"; do
     .data[]
     | select(
         .recommendations.type == "karpenter"
-        and .recommendations.has_recommended_changes == true
+        and .recommendations.hasRecommendedChanges == true
       )
     | {
-        pool:    .recommendations.recommended_config.metadata.name,
+        pool:    .recommendations.recommendedConfig.metadata.name,
         changes: .recommendations.changes
       }
   ' <<<"$recs_json")"
@@ -440,7 +440,7 @@ for uid in "${MAPPED_UIDS[@]}"; do
     log "    written: ${values_file}"
 
     change_summary="$(jq -r \
-      '.[] | "      \(.path): \(.current_value) → \(.recommended_value)"' \
+      '.[] | "      \(.path): \(.currentValue) → \(.recommendedValue)"' \
       <<<"$changes_json")"
     cluster_applied+="${pool_name}:"$'\n'"${change_summary}"$'\n'
 
