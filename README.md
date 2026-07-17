@@ -162,7 +162,6 @@ Actions UI or add a `schedule:` trigger to run it automatically.
 | `ai_provider` | | auto-detected | `anthropic` or `openai` |
 | `ai_base_url` | | provider default | Override AI endpoint |
 | `ai_model` | | provider default | Override AI model |
-| `dry_run` | | `false` | Print plan only, make no changes |
 
 ## What gets skipped
 

@@ -18,7 +18,6 @@
 # Flags:
 #   --pr-mode      per-cluster|single   (default: per-cluster)
 #   --title-prefix STRING               (default: "feat(INFRAFIT-0):")
-#   --dry-run                           Print what would happen; make no changes.
 #
 # Required environment variables:
 #   PS_CLIENT_ID        PerfectScale API client id
@@ -72,13 +71,11 @@ AI_MODEL="${AI_MODEL:-}"
 
 PR_MODE="$DEFAULT_PR_MODE"
 TITLE_PREFIX="$DEFAULT_TITLE_PREFIX"
-DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --pr-mode)      PR_MODE="$2";      shift 2 ;;
     --title-prefix) TITLE_PREFIX="$2"; shift 2 ;;
-    --dry-run)      DRY_RUN=true;      shift   ;;
     *) echo "ERROR: unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -279,14 +276,6 @@ mapfile -t MAPPED_UIDS < <(
 
 log "infrafit-cluster-map.json: ${#MAPPED_UIDS[@]} UID(s) — ${MAPPED_UIDS[*]}"
 
-if [[ "$DRY_RUN" == "true" ]]; then
-  log "[dry-run] cluster-map is valid — skipping API calls, git operations, and PR/issue creation"
-  log "────────────────── run summary ──────────────────────────────"
-  log "mode: DRY RUN — no changes made"
-  log "─────────────────────────────────────────────────────────────"
-  exit 0
-fi
-
 # ─── phase 0: authenticate ────────────────────────────────────────────────────
 
 log "phase 0: authenticating to PerfectScale API"
@@ -427,12 +416,6 @@ for uid in "${MAPPED_UIDS[@]}"; do
       continue
     fi
 
-    if [[ "$DRY_RUN" == "true" ]]; then
-      log "    [dry-run] would apply to ${values_file}: ${changes_json}"
-      cluster_applied+="${pool_name} (dry-run)"$'\n'
-      continue
-    fi
-
     log "    calling AI (${AI_PROVIDER}/${AI_MODEL})"
     edited_yaml="$(ai_edit_yaml "$values_file" "$pool_name" "$changes_json")"
 
@@ -452,7 +435,7 @@ for uid in "${MAPPED_UIDS[@]}"; do
 
   done <<<"$actionable_pools"
 
-  if [[ -n "$cluster_applied" && "$DRY_RUN" == "false" ]]; then
+  if [[ -n "$cluster_applied" ]]; then
     EDITED_FILES["$uid"]="$values_file"
     CLUSTER_SUMMARIES["$uid"]="$cluster_applied"
   fi
@@ -470,11 +453,6 @@ open_pr() {
   local body="$3"
   shift 3
   local -a stage_files=("$@")
-
-  if [[ "$DRY_RUN" == "true" ]]; then
-    log "[dry-run] would open PR '${title}' on branch '${branch}'"
-    return
-  fi
 
   git checkout "$BRANCH_BASE"
   git pull --ff-only
@@ -601,11 +579,7 @@ ${skip_items}
 ISSUE
 )"
 
-  if [[ "$DRY_RUN" == "true" ]]; then
-    log "[dry-run] would open tracking issue: ${issue_title}"
-  else
-    gh issue create --title "$issue_title" --body "$issue_body"
-  fi
+  gh issue create --title "$issue_title" --body "$issue_body"
 else
   log "no skipped items — tracking issue not needed"
 fi
@@ -617,5 +591,4 @@ log "────────────────── run summary ──�
 log "clusters discovered : ${cluster_count}"
 log "clusters with edits : ${#uids_with_edits[@]}"
 log "items skipped       : ${#SKIP_LIST[@]}"
-[[ "$DRY_RUN" == "true" ]] && log "mode                : DRY RUN — no changes made"
 log "─────────────────────────────────────────────────────────────"

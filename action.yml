@@ -90,13 +90,6 @@ inputs:
     required: false
     default: ""
 
-  dry_run:
-    description: >
-      When "true", the action prints what it would do but makes no git commits,
-      opens no PRs, and opens no issues.
-    required: false
-    default: "false"
-
 runs:
   using: composite
   steps:
@@ -128,11 +121,6 @@ runs:
         SCRIPT="${{ github.action_path }}/infrafit-apply.sh"
         chmod +x "$SCRIPT"
 
-        args=(
-          --pr-mode      "${{ inputs.pr_mode }}"
+        "$SCRIPT" \
+          --pr-mode      "${{ inputs.pr_mode }}" \
           --title-prefix "${{ inputs.title_prefix }}"
-        )
-
-        [[ "${{ inputs.dry_run }}" == "true" ]] && args+=(--dry-run)
-
-        "$SCRIPT" "${args[@]}"
