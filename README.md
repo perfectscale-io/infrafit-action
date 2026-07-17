@@ -25,7 +25,7 @@ operations, and PR/issue creation are handled by the action itself.
 |---|---|---|
 | Anthropic | `sk-ant-*` (auto-detected) | `claude-sonnet-4-5` |
 | OpenAI | everything else (auto-detected) | `gpt-4o` |
-| Azure OpenAI | set `ai_provider: openai` + `ai_base_url` | your deployment |
+| Azure OpenAI | set `ai_provider: openai` + `ai_base_url: https://<resource>.openai.azure.com/openai` (the `/openai` suffix is required) + `ai_model: <deployment name>` | your deployment |
 | Any OpenAI-compatible endpoint | set `ai_provider: openai` + `ai_base_url` | your model |
 
 ## Setup
@@ -33,7 +33,7 @@ operations, and PR/issue creation are handled by the action itself.
 ### 1. Add the cluster map
 
 Copy [`cluster-map.example.json`](cluster-map.example.json) to
-`.github/infrafit/cluster-map.json` in your repository and fill in your
+`.github/infrafit-cluster-map.json` in your repository and fill in your
 cluster UIDs and the repo-relative paths to your Helm values files.
 
 ```json
@@ -49,7 +49,8 @@ cluster UIDs and the repo-relative paths to your Helm values files.
 ```bash
 TOKEN=$(curl -s -X POST https://api.app.perfectscale.io/public/v1/auth/public_auth \
   -H 'content-type: application/json' \
-  -d '{"client_id":"<id>","client_secret":"<secret>"}' | jq -r .access_token)
+  -d '{"client_id":"<id>","client_secret":"<secret>"}' \
+  | jq -r '.data.access_token // .access_token // .token')
 
 curl -s -H "Authorization: Bearer $TOKEN" \
   https://api.app.perfectscale.io/public/v1/clusters \
@@ -154,7 +155,7 @@ Actions UI or add a `schedule:` trigger to run it automatically.
 | `ps_client_secret` | ✅ | — | PerfectScale API client secret |
 | `ai_api_key` | ✅ | — | AI provider API key |
 | `github_token` | ✅ | — | GitHub token with write access |
-| `cluster_map` | | `.github/infrafit/cluster-map.json` | Path to cluster-map file |
+| `cluster_map` | | `.github/infrafit-cluster-map.json` | Path to cluster-map file |
 | `pr_mode` | | `per-cluster` | `per-cluster` or `single` |
 | `title_prefix` | | `feat(INFRAFIT-0):` | Prefix for PR titles and commit subjects |
 | `base_branch` | | `main` | Branch to target for PRs |
@@ -170,10 +171,11 @@ GitHub issue with a reason and instructions for manual resolution:
 
 | Reason | How to fix |
 |---|---|
-| UID not in cluster-map.json | Add the cluster UID to `.github/infrafit/cluster-map.json` |
-| Values file not found | Verify the path in `cluster-map.json` matches the actual file |
+| UID not in cluster-map.json | Add the cluster UID to `.github/infrafit-cluster-map.json`, or ignore if intentionally unmanaged |
+| Values file not found | Verify the path in `.github/infrafit-cluster-map.json` matches the actual file |
+| Values file shared with another cluster | Per-cluster PRs need one file per cluster — use `pr_mode: single` or split the mapping |
 | Pool not defined in values file | Add the NodePool or update the mapping |
-| AI returned empty output | Re-run; apply manually if it persists |
+| AI edit failed or failed validation | The edit was discarded (API error, truncated/invalid YAML, or dropped pools). Re-run; apply manually if it persists |
 
 ## License
 

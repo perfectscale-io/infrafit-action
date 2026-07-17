@@ -15,7 +15,7 @@
     "  Alternatively, call the PerfectScale API directly:",
     "    TOKEN=$(curl -s -X POST https://api.app.perfectscale.io/public/v1/auth/public_auth \\",
     "      -H 'content-type: application/json' \\",
-    "      -d '{\"client_id\":\"<id>\",\"client_secret\":\"<secret>\"}' | jq -r .access_token)",
+    "      -d '{\"client_id\":\"<id>\",\"client_secret\":\"<secret>\"}' | jq -r '.data.access_token // .access_token // .token')",
     "    curl -s -H \"Authorization: Bearer $TOKEN\" \\",
     "      https://api.app.perfectscale.io/public/v1/clusters | jq -r '.data[] | \"\\(.uid)  \\(.name)\"'",
     "",

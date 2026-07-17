@@ -140,23 +140,28 @@ die()  { echo "[infrafit] ERROR: $*" >&2; exit 1; }
 # token, clock drift), honour Retry-After and retry a bounded number of times.
 ps_get() {
   local api_path="$1"
-  local attempt=0 http_code body retry_after
+  local attempt=0 http_code body retry_after hdr_file
+  hdr_file="$(mktemp)"
   while true; do
     attempt=$(( attempt + 1 ))
     # Capture body and trailing HTTP status without -f, so we can inspect 429.
-    body="$(curl -sS -w $'\n%{http_code}' \
+    body="$(curl -sS --connect-timeout 10 --max-time 60 \
+      -D "$hdr_file" \
+      -w $'\n%{http_code}' \
       -H "Authorization: Bearer ${TOKEN}" \
-      "${PS_BASE_URL}${api_path}")" || return 1
+      "${PS_BASE_URL}${api_path}")" || { rm -f "$hdr_file"; return 1; }
     http_code="${body##*$'\n'}"
     body="${body%$'\n'*}"
 
     if [[ "$http_code" == "429" && $attempt -le 5 ]]; then
-      retry_after="${RATE_LIMIT_SLEEP}"
+      retry_after="$(awk 'tolower($1) == "retry-after:" {print $2}' "$hdr_file" | tr -d '\r' | tail -1)"
+      [[ "$retry_after" =~ ^[0-9]+$ ]] || retry_after="$RATE_LIMIT_SLEEP"
       warn "  rate limited (429) on ${api_path} — waiting ${retry_after}s (attempt ${attempt}/5)"
       sleep "$retry_after"
       continue
     fi
 
+    rm -f "$hdr_file"
     [[ "$http_code" =~ ^2 ]] || return 1
     printf '%s' "$body"
     return 0
@@ -167,7 +172,10 @@ ps_get() {
 # Ask the configured AI provider to apply <changes_json> (a JSON array of
 # {path, operation, currentValue, recommendedValue} objects) to the
 # NodePool named <pool_name> inside <values_file>.
-# Prints the complete edited file content to stdout.
+# Prints the complete edited and validated file content to stdout.
+# Fails (non-zero) when the AI call fails or the output does not survive
+# validation: non-empty, parseable YAML, every previously-present NodePool
+# still present.
 ai_edit_yaml() {
   local values_file="$1"
   local pool_name="$2"
@@ -208,14 +216,69 @@ ${yaml_content}
 PROMPT
 )"
 
+  local edited fence='```'
+  edited="$(_ai_call "$prompt")" || return 1
+
+  # Strip a markdown code fence if the model added one despite the prompt.
+  if [[ "$edited" == "$fence"* ]]; then
+    edited="${edited#*$'\n'}"
+    edited="${edited%$'\n'"$fence"}"
+  fi
+
+  if [[ -z "$edited" ]]; then
+    warn "AI returned empty output for pool '${pool_name}'"
+    return 1
+  fi
+
+  local tmp_out
+  tmp_out="$(mktemp)"
+  printf '%s\n' "$edited" > "$tmp_out"
+
+  if ! yq -e '.' "$tmp_out" >/dev/null 2>&1; then
+    warn "AI output for pool '${pool_name}' is not valid YAML"
+    rm -f "$tmp_out"
+    return 1
+  fi
+
+  # Every NodePool present before the edit must still be present after it.
+  local missing
+  missing="$(comm -23 \
+    <(yq '.NodePools | keys | .[]' "$values_file" 2>/dev/null | sort) \
+    <(yq '.NodePools | keys | .[]' "$tmp_out"     2>/dev/null | sort))"
+  if [[ -n "$missing" ]]; then
+    warn "AI output for pool '${pool_name}' dropped NodePool(s): ${missing//$'\n'/, }"
+    rm -f "$tmp_out"
+    return 1
+  fi
+
+  rm -f "$tmp_out"
+  printf '%s\n' "$edited"
+}
+
+# _ai_call <prompt>
+# POST <prompt> to the configured provider and print the model's text reply.
+# Fails (non-zero) on transport errors, unexpected response shapes, and
+# responses truncated at the max_tokens cap.
+_ai_call() {
+  local prompt="$1"
+  local url extract stop_filter
+  local -a auth_headers
+
   case "$AI_PROVIDER" in
-    anthropic) _ai_call_anthropic "$prompt" ;;
-    openai)    _ai_call_openai    "$prompt" ;;
+    anthropic)
+      url="${AI_BASE_URL}/v1/messages"
+      auth_headers=(-H "x-api-key: ${AI_API_KEY}" -H "anthropic-version: 2023-06-01")
+      extract='.content[0].text'
+      stop_filter='.stop_reason'
+      ;;
+    openai)
+      url="${AI_BASE_URL}/v1/chat/completions"
+      auth_headers=(-H "Authorization: Bearer ${AI_API_KEY}")
+      extract='.choices[0].message.content'
+      stop_filter='.choices[0].finish_reason'
+      ;;
   esac
-}
 
-_ai_call_anthropic() {
-  local prompt="$1"
   local payload
   payload="$(jq -n \
     --arg model   "$AI_MODEL" \
@@ -224,37 +287,22 @@ _ai_call_anthropic() {
       messages: [{role: "user", content: $content}]}')"
 
   local response
-  response="$(curl -sSf \
-    -X POST "${AI_BASE_URL}/v1/messages" \
-    -H "x-api-key: ${AI_API_KEY}" \
-    -H "anthropic-version: 2023-06-01" \
+  response="$(curl -sSf --connect-timeout 10 --max-time 300 \
+    -X POST "$url" \
+    "${auth_headers[@]}" \
     -H "content-type: application/json" \
     -d "$payload")" \
-    || die "Anthropic API call failed"
+    || { warn "${AI_PROVIDER} API call failed"; return 1; }
 
-  jq -re '.content[0].text' <<<"$response" \
-    || die "unexpected Anthropic response shape: ${response}"
-}
+  local stop_reason
+  stop_reason="$(jq -r "$stop_filter" <<<"$response")"
+  if [[ "$stop_reason" == "max_tokens" || "$stop_reason" == "length" ]]; then
+    warn "${AI_PROVIDER} response was truncated at the max_tokens cap — the file is too large to edit in one call"
+    return 1
+  fi
 
-_ai_call_openai() {
-  local prompt="$1"
-  local payload
-  payload="$(jq -n \
-    --arg model   "$AI_MODEL" \
-    --arg content "$prompt" \
-    '{model: $model, max_tokens: 8192,
-      messages: [{role: "user", content: $content}]}')"
-
-  local response
-  response="$(curl -sSf \
-    -X POST "${AI_BASE_URL}/v1/chat/completions" \
-    -H "Authorization: Bearer ${AI_API_KEY}" \
-    -H "content-type: application/json" \
-    -d "$payload")" \
-    || die "OpenAI API call failed"
-
-  jq -re '.choices[0].message.content' <<<"$response" \
-    || die "unexpected OpenAI response shape: ${response}"
+  jq -re "$extract" <<<"$response" \
+    || { warn "unexpected ${AI_PROVIDER} response shape: ${response}"; return 1; }
 }
 
 # ─── infrafit-cluster-map ─────────────────────────────────────────────────────
@@ -285,7 +333,7 @@ auth_payload="$(jq -n \
   --arg sec "$PS_CLIENT_SECRET" \
   '{client_id: $id, client_secret: $sec}')"
 
-auth_response="$(curl -sSf \
+auth_response="$(curl -sSf --connect-timeout 10 --max-time 60 \
   -X POST "${PS_BASE_URL}/auth/public_auth" \
   -H "content-type: application/json" \
   -d "$auth_payload")" \
@@ -316,11 +364,24 @@ done < <(jq -r \
 
 # ─── state ────────────────────────────────────────────────────────────────────
 
-declare -A EDITED_FILES      # uid → values file path
+declare -A EDITED_FILES      # uid → values file path (repo path, untouched until phase 4)
+declare -A EDITED_TMP        # uid → temp file holding that cluster's edited content
+declare -A FILE_CLAIMED_BY   # values file path → last uid that produced edits for it
 declare -A CLUSTER_SUMMARIES # uid → human-readable summary of applied changes
 SKIP_LIST=()                 # entries: "uid\tcluster_name\treason"
 
 TODAY="$(date -u +%Y%m%d)"
+
+# Clusters visible to the API but missing from the cluster map are surfaced in
+# the tracking issue rather than silently ignored.
+declare -A IS_MAPPED
+for uid in "${MAPPED_UIDS[@]}"; do IS_MAPPED["$uid"]=1; done
+for uid in "${!CLUSTER_NAME_BY_UID[@]}"; do
+  if [[ -z "${IS_MAPPED[$uid]:-}" ]]; then
+    warn "cluster '${CLUSTER_NAME_BY_UID[$uid]}' (uid: ${uid}) is not in ${CLUSTER_MAP} — skipping"
+    SKIP_LIST+=("${uid}	${CLUSTER_NAME_BY_UID[$uid]}	uid not in infrafit-cluster-map.json")
+  fi
+done
 
 # ─── phases 1–3: fetch recommendations, map, edit ────────────────────────────
 
@@ -347,6 +408,14 @@ for uid in "${MAPPED_UIDS[@]}"; do
     continue
   fi
 
+  # In per-cluster mode each PR must contain exactly one cluster's edits, so a
+  # values file already claimed by an earlier cluster cannot be edited again.
+  if [[ "$PR_MODE" == "per-cluster" && -n "${FILE_CLAIMED_BY[$values_file]:-}" ]]; then
+    warn "  ${values_file} already has edits for cluster ${FILE_CLAIMED_BY[$values_file]} — per-cluster PRs cannot share a values file"
+    SKIP_LIST+=("${uid}	${cluster_name}	values file ${values_file} is shared with cluster ${FILE_CLAIMED_BY[$values_file]} — use pr_mode: single or split the mapping")
+    continue
+  fi
+
   # Phase 1: fetch recommendations
   log "  fetching recommendations (sleeping ${RATE_LIMIT_SLEEP}s for rate limit)"
   sleep "$RATE_LIMIT_SLEEP"
@@ -363,7 +432,10 @@ for uid in "${MAPPED_UIDS[@]}"; do
     fi
 
     api_path="/clusters/${uid}/infra-fit?period=30d&page_size=200&has_recommended_changes=true"
-    [[ -n "$next_cursor" ]] && api_path="${api_path}&cursor=${next_cursor}"
+    if [[ -n "$next_cursor" ]]; then
+      # The cursor is an opaque server token — URL-encode it.
+      api_path="${api_path}&cursor=$(jq -rn --arg c "$next_cursor" '$c|@uri')"
+    fi
 
     page_json="$(ps_get "$api_path")" \
       || die "failed to fetch recommendations for cluster ${uid} (page ${page})"
@@ -401,6 +473,16 @@ for uid in "${MAPPED_UIDS[@]}"; do
   pool_count="$(jq -s 'length' <<<"$actionable_pools")"
   log "  ${pool_count} actionable pool(s)"
 
+  # Edits are applied to a temp copy; the repository working tree is only
+  # touched in phase 4, on the PR branch itself. In single mode a values file
+  # shared by several clusters accumulates their edits in sequence.
+  work_file="$(mktemp)"
+  if [[ -n "${FILE_CLAIMED_BY[$values_file]:-}" ]]; then
+    cp "${EDITED_TMP[${FILE_CLAIMED_BY[$values_file]}]}" "$work_file"
+  else
+    cp "$values_file" "$work_file"
+  fi
+
   cluster_applied=""
 
   while IFS= read -r pool_entry; do
@@ -410,23 +492,22 @@ for uid in "${MAPPED_UIDS[@]}"; do
     log "    pool: ${pool_name}"
 
     # Verify the pool exists in the values file before spending an AI call.
-    if ! yq -e ".NodePools.${pool_name}" "$values_file" >/dev/null 2>&1; then
+    # strenv keeps the API-supplied name inert, whatever characters it holds.
+    if ! POOL="$pool_name" yq -e '.NodePools[strenv(POOL)]' "$work_file" >/dev/null 2>&1; then
       warn "    pool '${pool_name}' not found under .NodePools in ${values_file}"
       SKIP_LIST+=("${uid}	${cluster_name}	pool '${pool_name}' not defined in ${values_file}")
       continue
     fi
 
     log "    calling AI (${AI_PROVIDER}/${AI_MODEL})"
-    edited_yaml="$(ai_edit_yaml "$values_file" "$pool_name" "$changes_json")"
-
-    if [[ -z "$edited_yaml" ]]; then
-      warn "    AI returned empty output for pool '${pool_name}' — skipping"
-      SKIP_LIST+=("${uid}	${cluster_name}	AI returned empty output for pool '${pool_name}'")
+    if ! edited_yaml="$(ai_edit_yaml "$work_file" "$pool_name" "$changes_json")"; then
+      warn "    AI edit failed or failed validation for pool '${pool_name}' — skipping"
+      SKIP_LIST+=("${uid}	${cluster_name}	AI edit failed or failed validation for pool '${pool_name}'")
       continue
     fi
 
-    printf '%s' "$edited_yaml" > "$values_file"
-    log "    written: ${values_file}"
+    printf '%s\n' "$edited_yaml" > "$work_file"
+    log "    staged edit for: ${values_file}"
 
     change_summary="$(jq -r \
       '.[] | "      \(.path): \(.currentValue) → \(.recommendedValue)"' \
@@ -437,7 +518,11 @@ for uid in "${MAPPED_UIDS[@]}"; do
 
   if [[ -n "$cluster_applied" ]]; then
     EDITED_FILES["$uid"]="$values_file"
+    EDITED_TMP["$uid"]="$work_file"
+    FILE_CLAIMED_BY["$values_file"]="$uid"
     CLUSTER_SUMMARIES["$uid"]="$cluster_applied"
+  else
+    rm -f "$work_file"
   fi
 
 done
@@ -447,6 +532,10 @@ done
 log "phase 4: opening PR(s)"
 
 # open_pr <branch> <title> <body> <file> [<file> …]
+# Creates (or updates, on re-runs) <branch> off $BRANCH_BASE, applies the
+# staged content for each <file> from its cluster's temp copy, commits,
+# pushes, and opens a PR unless one is already open for the branch.
+# The working tree is clean on entry and left clean on $BRANCH_BASE.
 open_pr() {
   local branch="$1"
   local title="$2"
@@ -457,14 +546,18 @@ open_pr() {
   git checkout "$BRANCH_BASE"
   git pull --ff-only
 
+  local branch_exists=""
   if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
-    warn "branch '${branch}' already exists on origin — skipping PR"
-    return
+    log "branch '${branch}' already exists on origin — it will be updated"
+    branch_exists=1
+    git fetch origin "$branch"
   fi
 
-  git checkout -b "$branch"
+  git checkout -B "$branch"
 
+  local f
   for f in "${stage_files[@]}"; do
+    cp "${EDITED_TMP[${FILE_CLAIMED_BY[$f]}]}" "$f"
     git add "$f"
   done
 
@@ -477,12 +570,22 @@ open_pr() {
 
   git --no-pager diff --cached
   git commit -m "${TITLE_PREFIX} apply InfraFit recommendations (${branch#infrafit*/})"
-  git push -u origin HEAD
 
-  gh pr create \
-    --base  "$BRANCH_BASE" \
-    --title "$title" \
-    --body  "$body"
+  if [[ -n "$branch_exists" ]]; then
+    git push --force-with-lease -u origin "$branch"
+  else
+    git push -u origin "$branch"
+  fi
+
+  if [[ -n "$branch_exists" ]] \
+     && [[ -n "$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')" ]]; then
+    log "PR for branch '${branch}' is already open — branch updated"
+  else
+    gh pr create \
+      --base  "$BRANCH_BASE" \
+      --title "$title" \
+      --body  "$body"
+  fi
 
   git checkout "$BRANCH_BASE"
 }
@@ -572,14 +675,23 @@ These InfraFit recommendations could not be applied automatically.
 ${skip_items}
 ## How to resolve
 
-- **uid not in infrafit-cluster-map.json** — add the cluster UID to \`.github/infrafit-cluster-map.json\` mapped to the correct Helm values file.
-- **configuration file not found** — verify the path in \`.github/infrafit-cluster-map.json\` matches the actual file location in this repository.
+- **uid not in infrafit-cluster-map.json** — add the cluster UID to \`.github/infrafit-cluster-map.json\` mapped to the correct Helm values file, or ignore if the cluster is intentionally unmanaged.
+- **values file not found** — verify the path in \`.github/infrafit-cluster-map.json\` matches the actual file location in this repository.
+- **values file shared with another cluster** — in per-cluster PR mode every cluster needs its own values file. Switch to \`pr_mode: single\` or split the mapping.
 - **pool not defined in values file** — the PerfectScale API returned a recommendation for a NodePool that does not appear under \`NodePools:\` in the mapped values file. Add the pool or update the mapping.
-- **AI returned empty output** — re-run the workflow. If the issue persists, apply the change manually and close this issue.
+- **AI edit failed or failed validation** — the AI call errored, returned truncated/invalid YAML, or dropped existing NodePools, so the edit was discarded. Re-run the workflow; if it persists, apply the change manually and close this issue.
 ISSUE
 )"
 
-  gh issue create --title "$issue_title" --body "$issue_body"
+  # Update the existing open tracking issue instead of filing a duplicate.
+  existing_issue="$(gh issue list --state open --search 'InfraFit in:title' \
+    --json number --jq '.[0].number // empty')"
+  if [[ -n "$existing_issue" ]]; then
+    log "updating existing tracking issue #${existing_issue}"
+    gh issue edit "$existing_issue" --title "$issue_title" --body "$issue_body"
+  else
+    gh issue create --title "$issue_title" --body "$issue_body"
+  fi
 else
   log "no skipped items — tracking issue not needed"
 fi

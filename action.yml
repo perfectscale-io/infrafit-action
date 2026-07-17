@@ -94,7 +94,38 @@ runs:
   using: composite
   steps:
     - name: Install yq
-      uses: mikefarah/yq@038d06d4e7a99b076ca40b409de5225b49b78a4c   # v4.53.3
+      shell: bash
+      run: |
+        # GitHub-hosted runners preinstall mikefarah/yq v4+; install only when
+        # missing (e.g. minimal self-hosted runners). The binary is pinned by
+        # version and verified against its release checksum.
+        if command -v yq >/dev/null 2>&1 \
+           && [[ "$(yq --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1 | cut -d. -f1)" -ge 4 ]]; then
+          echo "yq already present: $(yq --version 2>&1)"
+          exit 0
+        fi
+
+        YQ_VERSION=v4.53.3
+        case "$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)" in
+          linux-x86_64)                  ASSET=yq_linux_amd64;  SHA256=fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4 ;;
+          linux-aarch64 | linux-arm64)   ASSET=yq_linux_arm64;  SHA256=578648e463a11c1b6db6010cbf41eafed6bee79466fcffa1bb446672cf7945ea ;;
+          darwin-x86_64)                 ASSET=yq_darwin_amd64; SHA256=b4ba1ecce3c47f00803f4f964de38394326c7a32eb6540616e04fb2935a0f08d ;;
+          darwin-arm64)                  ASSET=yq_darwin_arm64; SHA256=877de31753a4dd2401aa048937aa9a7fc4d5f6ce858cf31508c5802954297213 ;;
+          *) echo "ERROR: unsupported platform for yq install: $(uname -s)/$(uname -m)" >&2; exit 1 ;;
+        esac
+
+        install_dir="${RUNNER_TEMP}/infrafit-yq"
+        mkdir -p "$install_dir"
+        curl -sSfL --connect-timeout 10 --max-time 120 \
+          -o "${install_dir}/yq" \
+          "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${ASSET}"
+        if command -v sha256sum >/dev/null 2>&1; then
+          echo "${SHA256}  ${install_dir}/yq" | sha256sum -c -
+        else
+          echo "${SHA256}  ${install_dir}/yq" | shasum -a 256 -c -
+        fi
+        chmod +x "${install_dir}/yq"
+        echo "$install_dir" >> "$GITHUB_PATH"
 
     - name: Configure git identity
       shell: bash
@@ -115,6 +146,10 @@ runs:
         GH_TOKEN:         ${{ inputs.github_token }}
         CLUSTER_MAP:      ${{ inputs.cluster_map }}
         BRANCH_BASE:      ${{ inputs.base_branch }}
+        # Free-text inputs are passed through env, never interpolated into the
+        # script body, so their content cannot be parsed as shell code.
+        INPUT_PR_MODE:      ${{ inputs.pr_mode }}
+        INPUT_TITLE_PREFIX: ${{ inputs.title_prefix }}
       run: |
         # Resolve script path relative to this action's own directory so it
         # works regardless of where the caller checked out their repository.
@@ -122,5 +157,5 @@ runs:
         chmod +x "$SCRIPT"
 
         "$SCRIPT" \
-          --pr-mode      "${{ inputs.pr_mode }}" \
-          --title-prefix "${{ inputs.title_prefix }}"
+          --pr-mode      "$INPUT_PR_MODE" \
+          --title-prefix "$INPUT_TITLE_PREFIX"
