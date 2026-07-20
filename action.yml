@@ -22,9 +22,12 @@ inputs:
   ai_api_key:
     description: >
       API key for the AI provider used to translate recommendations into YAML
-      edits. Anthropic and OpenAI keys are auto-detected from the key prefix;
-      set ai_provider explicitly when using a compatible third-party endpoint.
-    required: true
+      edits. Required for Anthropic and OpenAI (keys are auto-detected from
+      the key prefix). Not needed for Amazon Bedrock, which authenticates with
+      AWS credentials — there it may optionally carry a Bedrock bearer token
+      instead.
+    required: false
+    default: ""
 
   github_token:
     description: >
@@ -70,9 +73,10 @@ inputs:
 
   ai_provider:
     description: >
-      AI provider to use for YAML editing: "anthropic" or "openai".
-      Auto-detected from the key prefix when omitted (sk-ant-* → anthropic,
-      everything else → openai).
+      AI provider to use for YAML editing: "anthropic", "openai" or "bedrock"
+      (Claude in Amazon Bedrock). Anthropic and OpenAI are auto-detected from
+      the key prefix when omitted (sk-ant-* → anthropic, everything else →
+      openai); "bedrock" must always be set explicitly.
     required: false
     default: ""
 
@@ -86,8 +90,17 @@ inputs:
 
   ai_model:
     description: >
-      Override the AI model. Defaults to claude-sonnet-5 for Anthropic and
-      gpt-5.6 for OpenAI when left empty.
+      Override the AI model. Defaults to claude-sonnet-5 for Anthropic,
+      gpt-5.6 for OpenAI, and anthropic.claude-sonnet-5 for Amazon Bedrock
+      when left empty.
+    required: false
+    default: ""
+
+  aws_region:
+    description: >
+      AWS region for Amazon Bedrock (e.g. us-east-1). Only used when
+      ai_provider is "bedrock". When empty, the ambient AWS_REGION set by
+      aws-actions/configure-aws-credentials is used.
     required: false
     default: ""
 
@@ -144,6 +157,9 @@ runs:
         AI_PROVIDER:      ${{ inputs.ai_provider }}
         AI_BASE_URL:      ${{ inputs.ai_base_url }}
         AI_MODEL:         ${{ inputs.ai_model }}
+        # Passed under its own name so an empty input cannot shadow the
+        # ambient AWS_REGION exported by aws-actions/configure-aws-credentials.
+        INPUT_AWS_REGION: ${{ inputs.aws_region }}
         GH_TOKEN:         ${{ inputs.github_token }}
         CLUSTER_MAP:      ${{ inputs.cluster_map }}
         BRANCH_BASE:      ${{ inputs.base_branch }}

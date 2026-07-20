@@ -21,12 +21,49 @@ operations, and PR/issue creation are handled by the action itself.
 
 ## Supported AI providers
 
-| Provider | Key prefix | Default model |
+| Provider | Configuration | Default model |
 |---|---|---|
-| Anthropic | `sk-ant-*` (auto-detected) | `claude-sonnet-5` |
-| OpenAI | everything else (auto-detected) | `gpt-5.6` |
+| Anthropic | `ai_api_key` with an `sk-ant-*` key (auto-detected) | `claude-sonnet-5` |
+| OpenAI | `ai_api_key` with any other key (auto-detected) | `gpt-5.6` |
+| Amazon Bedrock | set `ai_provider: bedrock` + AWS credentials — no API key needed (see below) | `anthropic.claude-sonnet-5` |
 | Azure OpenAI | set `ai_provider: openai` + `ai_base_url: https://<resource>.openai.azure.com/openai` (the `/openai` suffix is required) + `ai_model: <deployment name>` | your deployment |
 | Any OpenAI-compatible endpoint | set `ai_provider: openai` + `ai_base_url` | your model |
+
+### Using Amazon Bedrock
+
+With `ai_provider: bedrock` the action calls Claude in Amazon Bedrock and
+authenticates with AWS credentials instead of an API key. Configure
+credentials before the action runs — the standard pattern is OIDC via
+`aws-actions/configure-aws-credentials` (requires `id-token: write` in the
+job's permissions):
+
+```yaml
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d   # v6.2.2
+        with:
+          role-to-assume: arn:aws:iam::<account-id>:role/<role-name>
+          aws-region: us-east-1
+
+      - name: Run InfraFit apply
+        uses: perfectscale-io/infrafit-action@v1
+        with:
+          ps_client_id:     ${{ secrets.PS_CLIENT_ID }}
+          ps_client_secret: ${{ secrets.PS_CLIENT_SECRET }}
+          ai_provider:      bedrock
+          github_token:     ${{ steps.token.outputs.token }}
+```
+
+Requirements:
+
+- The AWS account must have [Bedrock model access](https://console.aws.amazon.com/bedrock/home#/modelaccess)
+  enabled for the Claude model in use.
+- The assumed role needs the `bedrock-mantle:CreateInference` permission on
+  the allowed model ARNs.
+- The region comes from `aws-region` above; pass the `aws_region` input to
+  override it.
+- Alternatively, a short-lived Bedrock bearer token (from
+  `aws-bedrock-token-generator`) can be passed as `ai_api_key` instead of AWS
+  credentials.
 
 ## Setup
 
@@ -162,16 +199,17 @@ Actions UI or add a `schedule:` trigger to run it automatically.
 |---|---|---|---|
 | `ps_client_id` | ✅ | — | PerfectScale API client id |
 | `ps_client_secret` | ✅ | — | PerfectScale API client secret |
-| `ai_api_key` | ✅ | — | AI provider API key |
+| `ai_api_key` | anthropic/openai | — | AI provider API key (not needed for `bedrock`) |
 | `github_token` | ✅ | — | GitHub token with write access |
 | `cluster_map` | | `.github/infrafit-cluster-map.json` | Path to cluster-map file |
 | `pr_mode` | | `per-cluster` | `per-cluster` or `single` |
 | `title_prefix` | | `feat(INFRAFIT-0):` | Prefix for PR titles and commit subjects |
 | `base_branch` | | `main` | Branch to target for PRs |
 | `ps_base_url` | | `https://api.app.perfectscale.io/public/v1` | PerfectScale API URL |
-| `ai_provider` | | auto-detected | `anthropic` or `openai` |
+| `ai_provider` | | auto-detected | `anthropic`, `openai` or `bedrock` (bedrock must be explicit) |
 | `ai_base_url` | | provider default | Override AI endpoint |
 | `ai_model` | | provider default | Override AI model |
+| `aws_region` | | ambient `AWS_REGION` | AWS region for Bedrock |
 
 ## What gets skipped
 

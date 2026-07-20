@@ -8,8 +8,9 @@
 # AI is used for exactly one focused step: given the current YAML file and the
 # structured list of changes from the API, produce the edited YAML.  Every
 # other step — API calls, file routing, git operations, PR/issue creation — is
-# plain shell.  Any provider that exposes an OpenAI-compatible chat-completions
-# endpoint works (Anthropic, OpenAI, Azure OpenAI, …).
+# plain shell.  Supported providers: Anthropic, OpenAI (or any
+# OpenAI-compatible chat-completions endpoint, e.g. Azure OpenAI), and Claude
+# in Amazon Bedrock.
 #
 # This script is invoked by action.yml and is not intended to be called
 # directly in most cases.  All configuration is passed via environment
@@ -23,14 +24,22 @@
 #   PS_CLIENT_ID        PerfectScale API client id
 #   PS_CLIENT_SECRET    PerfectScale API client secret
 #   GH_TOKEN            GitHub token (contents:write, pull-requests:write, issues:write)
-#   AI_API_KEY          API key for the AI provider
+#   AI_API_KEY          API key for the AI provider (required for anthropic/openai;
+#                       for bedrock, either AWS credentials or a Bedrock bearer
+#                       token passed here — see below)
 #
 # Optional environment variables:
 #   PS_BASE_URL         PerfectScale API base URL
 #                       (default: https://api.app.perfectscale.io/public/v1)
-#   AI_PROVIDER         anthropic|openai  (auto-detected from key prefix when empty)
+#   AI_PROVIDER         anthropic|openai|bedrock  (anthropic/openai are
+#                       auto-detected from the key prefix; bedrock must be set
+#                       explicitly)
 #   AI_BASE_URL         Override AI endpoint (e.g. Azure OpenAI deployment URL)
 #   AI_MODEL            Override AI model
+#   AWS_REGION          AWS region for bedrock (also read from the standard AWS
+#                       environment, e.g. set by aws-actions/configure-aws-credentials)
+#   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN
+#                       AWS credentials for bedrock SigV4 signing
 #   CLUSTER_MAP         Path to the cluster-map JSON file
 #                       (default: .github/infrafit-cluster-map.json)
 #   BRANCH_BASE         Base branch for PRs  (default: main)
@@ -66,6 +75,9 @@ BRANCH_BASE="${BRANCH_BASE:-$DEFAULT_BRANCH_BASE}"
 AI_PROVIDER="${AI_PROVIDER:-}"
 AI_BASE_URL="${AI_BASE_URL:-}"
 AI_MODEL="${AI_MODEL:-}"
+# The aws_region action input takes precedence over the ambient AWS_REGION
+# (typically exported by aws-actions/configure-aws-credentials).
+AWS_REGION="${INPUT_AWS_REGION:-${AWS_REGION:-}}"
 
 # ─── argument parsing ─────────────────────────────────────────────────────────
 
@@ -97,7 +109,7 @@ yq_major="${yq_version%%.*}"
 
 # ─── required environment variables ──────────────────────────────────────────
 
-for var in PS_CLIENT_ID PS_CLIENT_SECRET GH_TOKEN AI_API_KEY; do
+for var in PS_CLIENT_ID PS_CLIENT_SECRET GH_TOKEN; do
   [[ -n "${!var:-}" ]] \
     || { echo "ERROR: required environment variable is not set: ${var}" >&2; exit 1; }
 done
@@ -107,22 +119,45 @@ done
 if [[ -z "$AI_PROVIDER" ]]; then
   if [[ "$AI_API_KEY" == sk-ant-* ]]; then
     AI_PROVIDER="anthropic"
-  else
+  elif [[ -n "$AI_API_KEY" ]]; then
     AI_PROVIDER="openai"
+  else
+    echo "ERROR: cannot auto-detect the AI provider without ai_api_key — set ai_api_key (anthropic/openai) or set ai_provider explicitly ('bedrock' always requires it)" >&2
+    exit 1
   fi
 fi
 
 case "$AI_PROVIDER" in
   anthropic)
+    [[ -n "$AI_API_KEY" ]] \
+      || { echo "ERROR: ai_api_key is required when ai_provider is 'anthropic'" >&2; exit 1; }
     AI_BASE_URL="${AI_BASE_URL:-https://api.anthropic.com}"
     AI_MODEL="${AI_MODEL:-claude-sonnet-5}"
     ;;
   openai)
+    [[ -n "$AI_API_KEY" ]] \
+      || { echo "ERROR: ai_api_key is required when ai_provider is 'openai'" >&2; exit 1; }
     AI_BASE_URL="${AI_BASE_URL:-https://api.openai.com}"
     AI_MODEL="${AI_MODEL:-gpt-5.6}"
     ;;
+  bedrock)
+    # Auth is either AWS SigV4 (credentials in the standard AWS env vars, e.g.
+    # set by aws-actions/configure-aws-credentials) or a Bedrock bearer token
+    # passed as ai_api_key. SigV4 wins when both are present.
+    [[ -n "$AWS_REGION" ]] \
+      || { echo "ERROR: an AWS region is required when ai_provider is 'bedrock' — set the aws_region input or export AWS_REGION (aws-actions/configure-aws-credentials does this)" >&2; exit 1; }
+    if [[ -n "${AWS_ACCESS_KEY_ID:-}" ]]; then
+      [[ -n "${AWS_SECRET_ACCESS_KEY:-}" ]] \
+        || { echo "ERROR: AWS_ACCESS_KEY_ID is set but AWS_SECRET_ACCESS_KEY is not" >&2; exit 1; }
+    elif [[ -z "$AI_API_KEY" ]]; then
+      echo "ERROR: 'bedrock' needs AWS credentials in the environment (e.g. via aws-actions/configure-aws-credentials) or a Bedrock bearer token passed as ai_api_key" >&2
+      exit 1
+    fi
+    AI_BASE_URL="${AI_BASE_URL:-https://bedrock-mantle.${AWS_REGION}.api.aws/anthropic}"
+    AI_MODEL="${AI_MODEL:-anthropic.claude-sonnet-5}"
+    ;;
   *)
-    echo "ERROR: AI_PROVIDER must be 'anthropic' or 'openai', got: ${AI_PROVIDER}" >&2
+    echo "ERROR: AI_PROVIDER must be 'anthropic', 'openai' or 'bedrock', got: ${AI_PROVIDER}" >&2
     exit 1
     ;;
 esac
@@ -262,12 +297,12 @@ PROMPT
 _ai_call() {
   local prompt="$1"
   local url extract stop_filter token_param
-  local -a auth_headers
+  local -a auth_args
 
   case "$AI_PROVIDER" in
     anthropic)
       url="${AI_BASE_URL}/v1/messages"
-      auth_headers=(-H "x-api-key: ${AI_API_KEY}" -H "anthropic-version: 2023-06-01")
+      auth_args=(-H "x-api-key: ${AI_API_KEY}" -H "anthropic-version: 2023-06-01")
       # Claude models with adaptive thinking may lead with a thinking block —
       # select the first text block rather than assuming content[0].
       extract='[.content[] | select(.type == "text")][0].text'
@@ -276,11 +311,29 @@ _ai_call() {
       ;;
     openai)
       url="${AI_BASE_URL}/v1/chat/completions"
-      auth_headers=(-H "Authorization: Bearer ${AI_API_KEY}")
+      auth_args=(-H "Authorization: Bearer ${AI_API_KEY}")
       extract='.choices[0].message.content'
       stop_filter='.choices[0].finish_reason'
       # GPT-5-family reasoning models reject the legacy max_tokens parameter.
       token_param='max_completion_tokens'
+      ;;
+    bedrock)
+      # Claude in Amazon Bedrock serves the same Messages API shape as the
+      # first-party Anthropic endpoint; only the host and auth differ.
+      url="${AI_BASE_URL}/v1/messages"
+      auth_args=(-H "anthropic-version: 2023-06-01")
+      if [[ -n "${AWS_ACCESS_KEY_ID:-}" ]]; then
+        auth_args+=(--aws-sigv4 "aws:amz:${AWS_REGION}:bedrock-mantle" \
+                    --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}")
+        if [[ -n "${AWS_SESSION_TOKEN:-}" ]]; then
+          auth_args+=(-H "x-amz-security-token: ${AWS_SESSION_TOKEN}")
+        fi
+      else
+        auth_args+=(-H "x-api-key: ${AI_API_KEY}")
+      fi
+      extract='[.content[] | select(.type == "text")][0].text'
+      stop_filter='.stop_reason'
+      token_param='max_tokens'
       ;;
   esac
 
@@ -297,7 +350,7 @@ _ai_call() {
   local response
   response="$(curl -sSf --connect-timeout 10 --max-time 300 \
     -X POST "$url" \
-    "${auth_headers[@]}" \
+    "${auth_args[@]}" \
     -H "content-type: application/json" \
     -d "$payload")" \
     || { warn "${AI_PROVIDER} API call failed"; return 1; }
