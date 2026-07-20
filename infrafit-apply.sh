@@ -675,7 +675,7 @@ These InfraFit recommendations could not be applied automatically.
 ${skip_items}
 ## How to resolve
 
-- **uid not in infrafit-cluster-map.json** — add the cluster UID to \`.github/infrafit-cluster-map.json\` mapped to the correct Helm values file, or ignore if the cluster is intentionally unmanaged.
+- **uid not in infrafit-cluster-map.json** — add the cluster UID to \`.github/infrafit-cluster-map.json\` mapped to the correct Karpenter configuration file, or ignore if the cluster is intentionally unmanaged.
 - **values file not found** — verify the path in \`.github/infrafit-cluster-map.json\` matches the actual file location in this repository.
 - **values file shared with another cluster** — in per-cluster PR mode every cluster needs its own values file. Switch to \`pr_mode: single\` or split the mapping.
 - **pool not defined in values file** — the PerfectScale API returned a recommendation for a NodePool that does not appear under \`NodePools:\` in the mapped values file. Add the pool or update the mapping.

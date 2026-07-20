@@ -1,15 +1,15 @@
 # infrafit-action
 
 A GitHub Action that fetches [PerfectScale](https://perfectscale.io) InfraFit
-Karpenter NodePool recommendations and applies them to your Helm values files
-as a pull request.  Nothing is applied to a live cluster — the PR review is
+Karpenter NodePool recommendations and applies them to your Karpenter
+configuration files as a pull request.  Nothing is applied to a live cluster — the PR review is
 the gate.
 
 ## How it works
 
 1. Authenticates to the PerfectScale public API using your service token.
 2. Lists all clusters and fetches Karpenter NodePool recommendations for each
-   cluster that appears in your `cluster-map.json`.
+   cluster that appears in your `.github/infrafit-cluster-map.json`.
 3. For each actionable NodePool, calls your AI provider with the current YAML
    file and the structured list of changes — the AI returns the edited YAML.
 4. Opens a pull request (or one per cluster, depending on `pr_mode`) with the
@@ -34,11 +34,12 @@ operations, and PR/issue creation are handled by the action itself.
 
 Copy [`cluster-map.example.json`](cluster-map.example.json) to
 `.github/infrafit-cluster-map.json` in your repository and fill in your
-cluster UIDs and the repo-relative paths to your Helm values files.
+cluster UIDs and the repo-relative paths to your Karpenter configuration
+files.
 
 ```json
 {
-  "_readme": "Maps PerfectScale cluster UIDs to Helm values files.",
+  "_readme": "Maps PerfectScale cluster UIDs to Karpenter configuration files.",
   "abc123-your-cluster-uid": "karpenter-profiles/values/prod.yaml",
   "xyz789-another-cluster":  "karpenter-profiles/values/staging.yaml"
 }
@@ -46,20 +47,16 @@ cluster UIDs and the repo-relative paths to your Helm values files.
 
 **Finding your cluster UID:**
 
-```bash
-TOKEN=$(curl -s -X POST https://api.app.perfectscale.io/public/v1/auth/public_auth \
-  -H 'content-type: application/json' \
-  -d '{"client_id":"<id>","client_secret":"<secret>"}' \
-  | jq -r '.data.access_token // .access_token // .token')
+Log in to the [PerfectScale UI](https://app.perfectscale.io) and open the
+cluster — the UID is shown in the URL and on the cluster settings page.
 
-curl -s -H "Authorization: Bearer $TOKEN" \
-  https://api.app.perfectscale.io/public/v1/clusters \
-  | jq -r '.data[] | "\(.uid)  \(.name)"'
-```
+**Configuration file requirements:**
 
-**Values file requirements:**
-
-The values file must have a top-level `NodePools` key with one entry per pool:
+Each mapped file must have a top-level `NodePools` key with one entry per
+pool, keyed by the NodePool name. This is how the action routes each
+recommendation to the right piece of YAML: it looks up the recommended
+NodePool by name under `NodePools:` and edits only that entry — pools not
+found there are skipped and reported in the tracking issue.
 
 ```yaml
 NodePools:
@@ -183,7 +180,7 @@ GitHub issue with a reason and instructions for manual resolution:
 
 | Reason | How to fix |
 |---|---|
-| UID not in cluster-map.json | Add the cluster UID to `.github/infrafit-cluster-map.json`, or ignore if intentionally unmanaged |
+| UID not in infrafit-cluster-map.json | Add the cluster UID to `.github/infrafit-cluster-map.json`, or ignore if intentionally unmanaged |
 | Values file not found | Verify the path in `.github/infrafit-cluster-map.json` matches the actual file |
 | Values file shared with another cluster | Per-cluster PRs need one file per cluster — use `pr_mode: single` or split the mapping |
 | Pool not defined in values file | Add the NodePool or update the mapping |
