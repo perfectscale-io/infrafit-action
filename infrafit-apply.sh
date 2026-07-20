@@ -684,13 +684,17 @@ ISSUE
 )"
 
   # Update the existing open tracking issue instead of filing a duplicate.
+  # Issue reporting is best-effort: the PRs are already open at this point, so
+  # a token without issues:write must not fail the run — the skip list is
+  # always printed to the log above.
   existing_issue="$(gh issue list --state open --search 'InfraFit in:title' \
-    --json number --jq '.[0].number // empty')"
+    --json number --jq '.[0].number // empty' 2>/dev/null)" || existing_issue=""
   if [[ -n "$existing_issue" ]]; then
     log "updating existing tracking issue #${existing_issue}"
-    gh issue edit "$existing_issue" --title "$issue_title" --body "$issue_body"
-  else
-    gh issue create --title "$issue_title" --body "$issue_body"
+    gh issue edit "$existing_issue" --title "$issue_title" --body "$issue_body" \
+      || warn "could not update tracking issue #${existing_issue} — does the GitHub token have issues:write?"
+  elif ! gh issue create --title "$issue_title" --body "$issue_body"; then
+    warn "could not create tracking issue — does the GitHub token have issues:write? For GitHub App tokens, grant the App 'Issues: Read and write' (the workflow-level permissions block does not apply to App tokens)."
   fi
 else
   log "no skipped items — tracking issue not needed"

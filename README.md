@@ -72,7 +72,23 @@ NodePools:
       memory: 400Gi
 ```
 
-### 2. Add repository secrets
+### 2. GitHub App
+
+A GitHub App is required for the token you pass as `github_token`. The App
+must be installed on the repository with these repository permissions:
+
+| Permission | Access | Used for |
+|---|---|---|
+| Contents | Read and write | pushing branches with the proposed changes |
+| Pull requests | Read and write | opening pull requests |
+| Issues | Read and write | creating/updating the tracking issue for skipped items |
+
+> **Note:** an App token carries the App's own permissions — the
+> `permissions:` block in your workflow YAML has no effect on it. A run
+> failing with `Resource not accessible by integration` means the App lacks
+> one of the permissions above.
+
+### 3. Add repository secrets
 
 | Secret | Description |
 |---|---|
@@ -82,11 +98,7 @@ NodePools:
 | `APP_ID` | GitHub App client id (used to open PRs as the App) |
 | `PRIVATE_KEY` | GitHub App private key |
 
-> **Why a GitHub App token?** PRs opened with the default `GITHUB_TOKEN`
-> cannot trigger other workflows (branch protection checks).  A GitHub App
-> token does not have this restriction.
-
-### 3. Add the workflow
+### 4. Add the workflow
 
 Create `.github/workflows/infrafit-apply.yaml` in your repository:
 

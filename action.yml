@@ -30,7 +30,8 @@ inputs:
     description: >
       GitHub token with contents:write, pull-requests:write, and issues:write
       on the caller's repository. Use a GitHub App token so that opened PRs
-      can trigger downstream branch-protection checks.
+      can trigger downstream branch-protection checks — see the README
+      ("Create a GitHub App") for the required App permissions.
     required: true
 
   cluster_map:
