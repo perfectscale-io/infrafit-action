@@ -115,11 +115,11 @@ fi
 case "$AI_PROVIDER" in
   anthropic)
     AI_BASE_URL="${AI_BASE_URL:-https://api.anthropic.com}"
-    AI_MODEL="${AI_MODEL:-claude-sonnet-4-5}"
+    AI_MODEL="${AI_MODEL:-claude-sonnet-5}"
     ;;
   openai)
     AI_BASE_URL="${AI_BASE_URL:-https://api.openai.com}"
-    AI_MODEL="${AI_MODEL:-gpt-4o}"
+    AI_MODEL="${AI_MODEL:-gpt-5.6}"
     ;;
   *)
     echo "ERROR: AI_PROVIDER must be 'anthropic' or 'openai', got: ${AI_PROVIDER}" >&2
@@ -261,30 +261,38 @@ PROMPT
 # responses truncated at the max_tokens cap.
 _ai_call() {
   local prompt="$1"
-  local url extract stop_filter
+  local url extract stop_filter token_param
   local -a auth_headers
 
   case "$AI_PROVIDER" in
     anthropic)
       url="${AI_BASE_URL}/v1/messages"
       auth_headers=(-H "x-api-key: ${AI_API_KEY}" -H "anthropic-version: 2023-06-01")
-      extract='.content[0].text'
+      # Claude models with adaptive thinking may lead with a thinking block —
+      # select the first text block rather than assuming content[0].
+      extract='[.content[] | select(.type == "text")][0].text'
       stop_filter='.stop_reason'
+      token_param='max_tokens'
       ;;
     openai)
       url="${AI_BASE_URL}/v1/chat/completions"
       auth_headers=(-H "Authorization: Bearer ${AI_API_KEY}")
       extract='.choices[0].message.content'
       stop_filter='.choices[0].finish_reason'
+      # GPT-5-family reasoning models reject the legacy max_tokens parameter.
+      token_param='max_completion_tokens'
       ;;
   esac
 
+  # 16000 leaves room for reasoning/thinking tokens, which count against the
+  # same budget as the emitted YAML on current reasoning models.
   local payload
   payload="$(jq -n \
     --arg model   "$AI_MODEL" \
     --arg content "$prompt" \
-    '{model: $model, max_tokens: 8192,
-      messages: [{role: "user", content: $content}]}')"
+    --arg tp      "$token_param" \
+    '{model: $model, messages: [{role: "user", content: $content}]}
+     + {($tp): 16000}')"
 
   local response
   response="$(curl -sSf --connect-timeout 10 --max-time 300 \

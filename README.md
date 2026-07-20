@@ -23,8 +23,8 @@ operations, and PR/issue creation are handled by the action itself.
 
 | Provider | Key prefix | Default model |
 |---|---|---|
-| Anthropic | `sk-ant-*` (auto-detected) | `claude-sonnet-4-5` |
-| OpenAI | everything else (auto-detected) | `gpt-4o` |
+| Anthropic | `sk-ant-*` (auto-detected) | `claude-sonnet-5` |
+| OpenAI | everything else (auto-detected) | `gpt-5.6` |
 | Azure OpenAI | set `ai_provider: openai` + `ai_base_url: https://<resource>.openai.azure.com/openai` (the `/openai` suffix is required) + `ai_model: <deployment name>` | your deployment |
 | Any OpenAI-compatible endpoint | set `ai_provider: openai` + `ai_base_url` | your model |
 

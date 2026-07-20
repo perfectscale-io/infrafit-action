@@ -86,8 +86,8 @@ inputs:
 
   ai_model:
     description: >
-      Override the AI model. Defaults to claude-sonnet-4-5 for Anthropic and
-      gpt-4o for OpenAI when left empty.
+      Override the AI model. Defaults to claude-sonnet-5 for Anthropic and
+      gpt-5.6 for OpenAI when left empty.
     required: false
     default: ""
 
