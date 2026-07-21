@@ -115,15 +115,19 @@ files.
 ```json
 {
   "_readme": "Maps PerfectScale cluster UIDs to Karpenter configuration files.",
-  "abc123-your-cluster-uid": "karpenter-profiles/values/prod.yaml",
-  "xyz789-another-cluster":  "karpenter-profiles/values/staging.yaml"
+  "<cluster-uid-1>": "path/to/karpenter/values/prod.yaml",
+  "<cluster-uid-2>": "path/to/karpenter/values/staging.yaml"
 }
 ```
 
+Keys starting with `_` are treated as documentation comments and are ignored
+by the action.
+
 **Finding your cluster UID:**
 
-Log in to the [PerfectScale UI](https://app.perfectscale.io) and open the
-cluster — the UID is shown in the URL and on the cluster settings page.
+Log in to the [PerfectScale UI](https://app.perfectscale.io), and on the
+clusters overview page click the three-dot menu (⋮) next to the cluster and
+select **Copy Cluster UID**.
 
 **Configuration file requirements:**
 
