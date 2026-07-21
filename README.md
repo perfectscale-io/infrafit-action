@@ -32,12 +32,25 @@ operations, and PR/issue creation are handled by the action itself.
 ### Using Amazon Bedrock
 
 With `ai_provider: bedrock` the action calls Claude in Amazon Bedrock and
-authenticates with AWS credentials instead of an API key. Configure
-credentials before the action runs — the standard pattern is OIDC via
-`aws-actions/configure-aws-credentials` (requires `id-token: write` in the
-job's permissions):
+authenticates with AWS credentials instead of an API key — there is no AI
+secret to manage. Configure credentials before the action runs; the standard
+pattern is OIDC via `aws-actions/configure-aws-credentials`, which requires
+`id-token: write` in the workflow permissions:
 
 ```yaml
+permissions:
+  id-token: write        # OIDC for aws-actions/configure-aws-credentials
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  propose:
+    runs-on: ubuntu-latest
+    steps:
+      # ... GitHub App token and checkout steps as in the workflow example
+      # under "Setup → Add the workflow" below ...
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d   # v6.2.2
         with:
@@ -53,17 +66,42 @@ job's permissions):
           github_token:     ${{ steps.token.outputs.token }}
 ```
 
-Requirements:
+#### Required IAM role
 
-- The AWS account must have [Bedrock model access](https://console.aws.amazon.com/bedrock/home#/modelaccess)
-  enabled for the Claude model in use.
-- The assumed role needs the `bedrock-mantle:CreateInference` permission on
-  the allowed model ARNs.
-- The region comes from `aws-region` above; pass the `aws_region` input to
+The IAM role the workflow assumes must be allowed to call the Bedrock
+inference API. Grant it the `bedrock-mantle:CreateInference` action — either
+by attaching the AWS-managed policy
+[`AmazonBedrockMantleInferenceAccess`](https://docs.aws.amazon.com/aws-managed-policy/latest/reference/AmazonBedrockMantleInferenceAccess.html)
+or with the equivalent inline policy:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "bedrock-mantle:CreateInference",
+      "Resource": "arn:aws:bedrock-mantle:*:<account-id>:project/*"
+    }
+  ]
+}
+```
+
+Without it, AI calls fail with `AccessDeniedException` (HTTP 403). Prefer a
+dedicated role for this workflow over widening a role shared with other
+pipelines.
+
+#### Additional requirements
+
+- [Bedrock model access](https://console.aws.amazon.com/bedrock/home#/modelaccess)
+  must be enabled for the Claude model in the AWS account.
+- The region must be one where the `bedrock-mantle` endpoint is available —
+  see the [AWS region list](https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html#bedrock-mantle-supported).
+  It is taken from `aws-region` above; pass the `aws_region` input to
   override it.
-- Alternatively, a short-lived Bedrock bearer token (from
-  `aws-bedrock-token-generator`) can be passed as `ai_api_key` instead of AWS
-  credentials.
+- Instead of AWS credentials, a short-lived Bedrock bearer token (see
+  [Bedrock API keys](https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html))
+  can be passed as `ai_api_key`.
 
 ## Setup
 
