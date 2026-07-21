@@ -492,10 +492,10 @@ for uid in "${MAPPED_UIDS[@]}"; do
       break
     fi
 
-    api_path="/clusters/${uid}/infra-fit?period=30d&page_size=200&has_recommended_changes=true"
+    api_path="/clusters/${uid}/infra-fit?period=30d&pageSize=200&hasRecommendations=true"
     if [[ -n "$next_cursor" ]]; then
-      # The cursor is an opaque server token — URL-encode it.
-      api_path="${api_path}&cursor=$(jq -rn --arg c "$next_cursor" '$c|@uri')"
+      # The page token is an opaque server token — URL-encode it.
+      api_path="${api_path}&pageToken=$(jq -rn --arg c "$next_cursor" '$c|@uri')"
     fi
 
     page_json="$(ps_get "$api_path")" \
@@ -518,7 +518,7 @@ for uid in "${MAPPED_UIDS[@]}"; do
     .data[]
     | select(
         .recommendations.type == "karpenter"
-        and .recommendations.hasRecommendedChanges == true
+        and .recommendations.hasChanges == true
       )
     | {
         pool:    .recommendations.recommendedConfig.metadata.name,
