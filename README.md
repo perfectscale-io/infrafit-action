@@ -26,6 +26,7 @@ operations, and PR/issue creation are handled by the action itself.
 | Anthropic | `ai_api_key` with an `sk-ant-*` key (auto-detected) | `claude-sonnet-5` |
 | OpenAI | `ai_api_key` with any other key (auto-detected) | `gpt-5.6` |
 | Amazon Bedrock | set `ai_provider: bedrock` + AWS credentials — no API key needed (see below) | `anthropic.claude-sonnet-5` |
+| GitHub Copilot | set `ai_provider: copilot` + `copilot-requests: write` permission — no API key needed (see below) | Copilot CLI default |
 | Azure OpenAI | set `ai_provider: openai` + `ai_base_url: https://<resource>.openai.azure.com/openai` (the `/openai` suffix is required) + `ai_model: <deployment name>` | your deployment |
 | Any OpenAI-compatible endpoint | set `ai_provider: openai` + `ai_base_url` | your model |
 
@@ -102,6 +103,37 @@ pipelines.
 - Instead of AWS credentials, a short-lived Bedrock bearer token (see
   [Bedrock API keys](https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html))
   can be passed as `ai_api_key`.
+
+### Using GitHub Copilot
+
+With `ai_provider: copilot` the action runs the AI edits through the
+[Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli-in-actions),
+authenticated with the workflow's built-in `GITHUB_TOKEN` — no API key and no
+cloud credentials to manage. The action installs the CLI automatically.
+
+Two prerequisites:
+
+1. The workflow must grant the `copilot-requests: write` permission — the
+   built-in token can only do what the workflow explicitly allows, and this
+   scope authorizes it to make Copilot requests:
+
+   ```yaml
+   permissions:
+     copilot-requests: write
+     # ... plus the permissions your workflow already needs
+   ```
+
+2. An organization admin must enable the **"Allow use of Copilot CLI billed
+   to the organization"** Copilot policy — Copilot usage from CI has no user
+   seat to bill, so the org explicitly consents to the requests being billed
+   to its Copilot plan (as premium requests, one per edited NodePool).
+
+Notes:
+
+- `ai_model` is ignored for this provider — the Copilot CLI selects its own
+  model.
+- The PRs are still opened with the `github_token` input (GitHub App token);
+  the workflow's `GITHUB_TOKEN` is used only for the Copilot calls.
 
 ## Setup
 
@@ -241,14 +273,14 @@ Actions UI or add a `schedule:` trigger to run it automatically.
 |---|---|---|---|
 | `ps_client_id` | ✅ | — | PerfectScale API client id |
 | `ps_client_secret` | ✅ | — | PerfectScale API client secret |
-| `ai_api_key` | anthropic/openai | — | AI provider API key (not needed for `bedrock`) |
+| `ai_api_key` | anthropic/openai | — | AI provider API key (not needed for `bedrock` or `copilot`) |
 | `github_token` | ✅ | — | GitHub token with write access |
 | `cluster_map` | | `.github/infrafit-cluster-map.json` | Path to cluster-map file |
 | `pr_mode` | | `per-cluster` | `per-cluster` or `single` |
 | `title_prefix` | | `feat(INFRAFIT-0):` | Prefix for PR titles and commit subjects |
 | `base_branch` | | `main` | Branch to target for PRs |
 | `ps_base_url` | | `https://api.app.perfectscale.io/public/v1` | PerfectScale API URL |
-| `ai_provider` | | auto-detected | `anthropic`, `openai` or `bedrock` (bedrock must be explicit) |
+| `ai_provider` | | auto-detected | `anthropic`, `openai`, `bedrock` or `copilot` (the last two must be explicit) |
 | `ai_base_url` | | provider default | Override AI endpoint |
 | `ai_model` | | provider default | Override AI model |
 | `aws_region` | | ambient `AWS_REGION` | AWS region for Bedrock |

@@ -23,9 +23,9 @@ inputs:
     description: >
       API key for the AI provider used to translate recommendations into YAML
       edits. Required for Anthropic and OpenAI (keys are auto-detected from
-      the key prefix). Not needed for Amazon Bedrock, which authenticates with
-      AWS credentials — there it may optionally carry a Bedrock bearer token
-      instead.
+      the key prefix). Not needed for Amazon Bedrock (authenticates with AWS
+      credentials; may optionally carry a Bedrock bearer token) or GitHub
+      Copilot (authenticates with the workflow's GITHUB_TOKEN).
     required: false
     default: ""
 
@@ -73,10 +73,11 @@ inputs:
 
   ai_provider:
     description: >
-      AI provider to use for YAML editing: "anthropic", "openai" or "bedrock"
-      (Claude in Amazon Bedrock). Anthropic and OpenAI are auto-detected from
-      the key prefix when omitted (sk-ant-* → anthropic, everything else →
-      openai); "bedrock" must always be set explicitly.
+      AI provider to use for YAML editing: "anthropic", "openai", "bedrock"
+      (Claude in Amazon Bedrock) or "copilot" (GitHub Copilot CLI). Anthropic
+      and OpenAI are auto-detected from the key prefix when omitted (sk-ant-*
+      → anthropic, everything else → openai); "bedrock" and "copilot" must
+      always be set explicitly.
     required: false
     default: ""
 
@@ -92,7 +93,8 @@ inputs:
     description: >
       Override the AI model. Defaults to claude-sonnet-5 for Anthropic,
       gpt-5.6 for OpenAI, and anthropic.claude-sonnet-5 for Amazon Bedrock
-      when left empty.
+      when left empty. Ignored for Copilot — the Copilot CLI selects its own
+      model.
     required: false
     default: ""
 
@@ -141,6 +143,12 @@ runs:
         chmod +x "${install_dir}/yq"
         echo "$install_dir" >> "$GITHUB_PATH"
 
+    - name: Install Copilot CLI
+      if: ${{ inputs.ai_provider == 'copilot' }}
+      shell: bash
+      run: |
+        command -v copilot >/dev/null 2>&1 || npm install -g @github/copilot
+
     - name: Configure git identity
       shell: bash
       run: |
@@ -160,6 +168,10 @@ runs:
         # Passed under its own name so an empty input cannot shadow the
         # ambient AWS_REGION exported by aws-actions/configure-aws-credentials.
         INPUT_AWS_REGION: ${{ inputs.aws_region }}
+        # Workflow token for the Copilot CLI (requires the workflow to grant
+        # `copilot-requests: write`). gh keeps using GH_TOKEN above, which
+        # takes precedence over GITHUB_TOKEN.
+        GITHUB_TOKEN:     ${{ github.token }}
         GH_TOKEN:         ${{ inputs.github_token }}
         CLUSTER_MAP:      ${{ inputs.cluster_map }}
         BRANCH_BASE:      ${{ inputs.base_branch }}

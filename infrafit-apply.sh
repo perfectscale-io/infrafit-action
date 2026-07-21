@@ -9,8 +9,8 @@
 # structured list of changes from the API, produce the edited YAML.  Every
 # other step — API calls, file routing, git operations, PR/issue creation — is
 # plain shell.  Supported providers: Anthropic, OpenAI (or any
-# OpenAI-compatible chat-completions endpoint, e.g. Azure OpenAI), and Claude
-# in Amazon Bedrock.
+# OpenAI-compatible chat-completions endpoint, e.g. Azure OpenAI), Claude in
+# Amazon Bedrock, and GitHub Copilot (via the Copilot CLI).
 #
 # This script is invoked by action.yml and is not intended to be called
 # directly in most cases.  All configuration is passed via environment
@@ -31,15 +31,18 @@
 # Optional environment variables:
 #   PS_BASE_URL         PerfectScale API base URL
 #                       (default: https://api.app.perfectscale.io/public/v1)
-#   AI_PROVIDER         anthropic|openai|bedrock  (anthropic/openai are
-#                       auto-detected from the key prefix; bedrock must be set
-#                       explicitly)
+#   AI_PROVIDER         anthropic|openai|bedrock|copilot  (anthropic/openai are
+#                       auto-detected from the key prefix; bedrock and copilot
+#                       must be set explicitly)
 #   AI_BASE_URL         Override AI endpoint (e.g. Azure OpenAI deployment URL)
 #   AI_MODEL            Override AI model
 #   AWS_REGION          AWS region for bedrock (also read from the standard AWS
 #                       environment, e.g. set by aws-actions/configure-aws-credentials)
 #   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN
 #                       AWS credentials for bedrock SigV4 signing
+#   GITHUB_TOKEN        Workflow token for copilot (set by action.yml from
+#                       github.token; the workflow must grant the
+#                       `copilot-requests: write` permission)
 #   CLUSTER_MAP         Path to the cluster-map JSON file
 #                       (default: .github/infrafit-cluster-map.json)
 #   BRANCH_BASE         Base branch for PRs  (default: main)
@@ -122,7 +125,7 @@ if [[ -z "$AI_PROVIDER" ]]; then
   elif [[ -n "$AI_API_KEY" ]]; then
     AI_PROVIDER="openai"
   else
-    echo "ERROR: cannot auto-detect the AI provider without ai_api_key — set ai_api_key (anthropic/openai) or set ai_provider explicitly ('bedrock' always requires it)" >&2
+    echo "ERROR: cannot auto-detect the AI provider without ai_api_key — set ai_api_key (anthropic/openai) or set ai_provider explicitly ('bedrock' and 'copilot' always require it)" >&2
     exit 1
   fi
 fi
@@ -156,8 +159,19 @@ case "$AI_PROVIDER" in
     AI_BASE_URL="${AI_BASE_URL:-https://bedrock-mantle.${AWS_REGION}.api.aws/anthropic}"
     AI_MODEL="${AI_MODEL:-anthropic.claude-sonnet-5}"
     ;;
+  copilot)
+    # Copilot CLI authenticates with the workflow's GITHUB_TOKEN (passed
+    # through by action.yml); the workflow must grant `copilot-requests: write`
+    # and the org must allow Copilot CLI billed to the organization.
+    [[ -n "${GITHUB_TOKEN:-}" ]] \
+      || { echo "ERROR: GITHUB_TOKEN is required when ai_provider is 'copilot' — grant the workflow the 'copilot-requests: write' permission" >&2; exit 1; }
+    command -v copilot >/dev/null 2>&1 \
+      || { echo "ERROR: required command not found: copilot (the action installs it automatically when ai_provider is 'copilot')" >&2; exit 1; }
+    [[ -z "$AI_MODEL" ]] \
+      || echo "WARN: ai_model is ignored for 'copilot' — the Copilot CLI selects its own model" >&2
+    ;;
   *)
-    echo "ERROR: AI_PROVIDER must be 'anthropic', 'openai' or 'bedrock', got: ${AI_PROVIDER}" >&2
+    echo "ERROR: AI_PROVIDER must be 'anthropic', 'openai', 'bedrock' or 'copilot', got: ${AI_PROVIDER}" >&2
     exit 1
     ;;
 esac
@@ -296,6 +310,22 @@ PROMPT
 # responses truncated at the max_tokens cap.
 _ai_call() {
   local prompt="$1"
+
+  # Copilot is CLI-based (no HTTP endpoint) — handled before the curl path.
+  # --yolo runs non-interactively per GitHub's Actions guidance; since the
+  # CLI is agentic, the subshell drops every secret except the GITHUB_TOKEN
+  # it authenticates with, so tool use can never read them.
+  if [[ "$AI_PROVIDER" == "copilot" ]]; then
+    local response
+    response="$( (
+      unset GH_TOKEN PS_CLIENT_ID PS_CLIENT_SECRET AI_API_KEY \
+            AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+      copilot --yolo -p "$prompt"
+    ) )" || { warn "copilot CLI call failed"; return 1; }
+    printf '%s' "$response"
+    return 0
+  fi
+
   local url extract stop_filter token_param
   local -a auth_args
 
