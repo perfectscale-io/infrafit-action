@@ -522,7 +522,7 @@ for uid in "${MAPPED_UIDS[@]}"; do
       break
     fi
 
-    api_path="/clusters/${uid}/infra-fit?period=30d&pageSize=200&hasRecommendations=true"
+    api_path="/clusters/${uid}/node-groups?period=30d&pageSize=200&hasRecommendations=true"
     if [[ -n "$next_cursor" ]]; then
       # The page token is an opaque server token — URL-encode it.
       api_path="${api_path}&pageToken=$(jq -rn --arg c "$next_cursor" '$c|@uri')"
