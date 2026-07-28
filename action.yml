@@ -1,0 +1,190 @@
+name: InfraFit Apply
+description: >
+  Fetch PerfectScale InfraFit Karpenter NodePool recommendations, apply them
+  to Karpenter configuration files in the caller's repository, and open a pull
+  request. Nothing is applied to a live cluster — the PR review is the gate.
+
+author: PerfectScale by DoiT
+
+branding:
+  icon: sliders
+  color: blue
+
+inputs:
+  ps_client_id:
+    description: PerfectScale API client id (Org Settings → API Tokens).
+    required: true
+
+  ps_client_secret:
+    description: PerfectScale API client secret.
+    required: true
+
+  ai_api_key:
+    description: >
+      API key for the AI provider used to translate recommendations into YAML
+      edits. Required for Anthropic and OpenAI (keys are auto-detected from
+      the key prefix). Not needed for Amazon Bedrock (authenticates with AWS
+      credentials; may optionally carry a Bedrock bearer token) or GitHub
+      Copilot (authenticates with the workflow's GITHUB_TOKEN).
+    required: false
+    default: ""
+
+  github_token:
+    description: >
+      GitHub token with contents:write, pull-requests:write, and issues:write
+      on the caller's repository. Use a GitHub App token so that opened PRs
+      can trigger downstream branch-protection checks — see the README
+      ("Create a GitHub App") for the required App permissions.
+    required: true
+
+  cluster_map:
+    description: >
+      Repo-relative path to the cluster-map JSON file that maps PerfectScale
+      cluster UIDs to Karpenter configuration files. See cluster-map.example.json for the
+      expected format.
+    required: false
+    default: .github/infrafit-cluster-map.json
+
+  pr_mode:
+    description: >
+      How to group pull requests. "per-cluster" opens one PR per cluster that
+      produced edits. "single" opens one combined PR for the entire run.
+    required: false
+    default: per-cluster
+
+  title_prefix:
+    description: >
+      String prepended verbatim to every PR title and commit subject line.
+      Useful for attaching a Jira or Linear ticket key.
+    required: false
+    default: "feat(INFRAFIT-0):"
+
+  base_branch:
+    description: Git branch to branch off and target for pull requests.
+    required: false
+    default: main
+
+  ps_base_url:
+    description: >
+      PerfectScale public API base URL. Override only when targeting a
+      non-production instance (e.g. during development or testing).
+    required: false
+    default: https://api.app.perfectscale.io/public/v1
+
+  ai_provider:
+    description: >
+      AI provider to use for YAML editing: "anthropic", "openai", "bedrock"
+      (Claude in Amazon Bedrock) or "copilot" (GitHub Copilot CLI). Anthropic
+      and OpenAI are auto-detected from the key prefix when omitted (sk-ant-*
+      → anthropic, everything else → openai); "bedrock" and "copilot" must
+      always be set explicitly.
+    required: false
+    default: ""
+
+  ai_base_url:
+    description: >
+      Override the AI API endpoint. Use this for Azure OpenAI deployments or
+      any other OpenAI-compatible proxy. Leave empty to use the provider
+      default.
+    required: false
+    default: ""
+
+  ai_model:
+    description: >
+      Override the AI model. Defaults to claude-sonnet-5 for Anthropic,
+      gpt-5.6 for OpenAI, and anthropic.claude-sonnet-5 for Amazon Bedrock
+      when left empty. Ignored for Copilot — the Copilot CLI selects its own
+      model.
+    required: false
+    default: ""
+
+  aws_region:
+    description: >
+      AWS region for Amazon Bedrock (e.g. us-east-1). Only used when
+      ai_provider is "bedrock". When empty, the ambient AWS_REGION set by
+      aws-actions/configure-aws-credentials is used.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install yq
+      shell: bash
+      run: |
+        # GitHub-hosted runners preinstall mikefarah/yq v4+; install only when
+        # missing (e.g. minimal self-hosted runners). The binary is pinned by
+        # version and verified against its release checksum.
+        if command -v yq >/dev/null 2>&1 \
+           && [[ "$(yq --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1 | cut -d. -f1)" -ge 4 ]]; then
+          echo "yq already present: $(yq --version 2>&1)"
+          exit 0
+        fi
+
+        YQ_VERSION=v4.53.3
+        case "$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)" in
+          linux-x86_64)                  ASSET=yq_linux_amd64;  SHA256=fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4 ;;
+          linux-aarch64 | linux-arm64)   ASSET=yq_linux_arm64;  SHA256=578648e463a11c1b6db6010cbf41eafed6bee79466fcffa1bb446672cf7945ea ;;
+          darwin-x86_64)                 ASSET=yq_darwin_amd64; SHA256=b4ba1ecce3c47f00803f4f964de38394326c7a32eb6540616e04fb2935a0f08d ;;
+          darwin-arm64)                  ASSET=yq_darwin_arm64; SHA256=877de31753a4dd2401aa048937aa9a7fc4d5f6ce858cf31508c5802954297213 ;;
+          *) echo "ERROR: unsupported platform for yq install: $(uname -s)/$(uname -m)" >&2; exit 1 ;;
+        esac
+
+        install_dir="${RUNNER_TEMP}/infrafit-yq"
+        mkdir -p "$install_dir"
+        curl -sSfL --connect-timeout 10 --max-time 120 \
+          -o "${install_dir}/yq" \
+          "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${ASSET}"
+        if command -v sha256sum >/dev/null 2>&1; then
+          echo "${SHA256}  ${install_dir}/yq" | sha256sum -c -
+        else
+          echo "${SHA256}  ${install_dir}/yq" | shasum -a 256 -c -
+        fi
+        chmod +x "${install_dir}/yq"
+        echo "$install_dir" >> "$GITHUB_PATH"
+
+    - name: Install Copilot CLI
+      if: ${{ inputs.ai_provider == 'copilot' }}
+      shell: bash
+      run: |
+        command -v copilot >/dev/null 2>&1 || npm install -g @github/copilot
+
+    - name: Configure git identity
+      shell: bash
+      run: |
+        git config user.name  "infrafit-bot"
+        git config user.email "infrafit-bot@users.noreply.github.com"
+
+    - name: Run InfraFit apply
+      shell: bash
+      env:
+        PS_CLIENT_ID:     ${{ inputs.ps_client_id }}
+        PS_CLIENT_SECRET: ${{ inputs.ps_client_secret }}
+        PS_BASE_URL:      ${{ inputs.ps_base_url }}
+        AI_API_KEY:       ${{ inputs.ai_api_key }}
+        AI_PROVIDER:      ${{ inputs.ai_provider }}
+        AI_BASE_URL:      ${{ inputs.ai_base_url }}
+        AI_MODEL:         ${{ inputs.ai_model }}
+        # Passed under its own name so an empty input cannot shadow the
+        # ambient AWS_REGION exported by aws-actions/configure-aws-credentials.
+        INPUT_AWS_REGION: ${{ inputs.aws_region }}
+        # Workflow token for the Copilot CLI (requires the workflow to grant
+        # `copilot-requests: write`). gh keeps using GH_TOKEN above, which
+        # takes precedence over GITHUB_TOKEN.
+        GITHUB_TOKEN:     ${{ github.token }}
+        GH_TOKEN:         ${{ inputs.github_token }}
+        CLUSTER_MAP:      ${{ inputs.cluster_map }}
+        BRANCH_BASE:      ${{ inputs.base_branch }}
+        # Free-text inputs are passed through env, never interpolated into the
+        # script body, so their content cannot be parsed as shell code.
+        INPUT_PR_MODE:      ${{ inputs.pr_mode }}
+        INPUT_TITLE_PREFIX: ${{ inputs.title_prefix }}
+      run: |
+        # Resolve script path relative to this action's own directory so it
+        # works regardless of where the caller checked out their repository.
+        SCRIPT="${{ github.action_path }}/infrafit-apply.sh"
+        chmod +x "$SCRIPT"
+
+        "$SCRIPT" \
+          --pr-mode      "$INPUT_PR_MODE" \
+          --title-prefix "$INPUT_TITLE_PREFIX"

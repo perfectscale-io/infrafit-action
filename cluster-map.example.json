@@ -1,0 +1,5 @@
+{
+  "_readme": "Maps PerfectScale cluster UIDs to Karpenter configuration files.",
+  "<cluster-uid-1>": "path/to/karpenter/values/prod.yaml",
+  "<cluster-uid-2>": "path/to/karpenter/values/staging.yaml"
+}
